@@ -10,14 +10,17 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, InlineQuery, InlineQueryResultArticle, InputTextMessageContent, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from google import genai
 from PIL import Image
 
-TOKEN = os.environ.get("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise ValueError("BOT_TOKEN topilmadi! Render'dagi Environment bo'limiga BOT_TOKEN qo'shganingizni tekshiring.")
+
 ADMIN_ID = 5081583283  # O'z Telegram ID raqamingizni yozing
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 stats = {
@@ -77,7 +80,7 @@ def get_all_users():
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola yoki xabar matnini yuboring!",
+        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring!",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
@@ -89,7 +92,7 @@ TEXTS = {
         'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling."
     },
     'ru': {
-        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку или текст!",
+        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку, текст или изображение/QR-код!",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
         'spam': "⚠️ Слишком частые запросы! Пожалуйста, подождите.",
@@ -101,13 +104,13 @@ TEXTS = {
         'clean': "✅ Опасных признаков не обнаружено, но будьте бдительны."
     },
     'en': {
-        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link or text!",
+        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link, text, or image/QR-code!",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
         'spam': "⚠️ You are sending messages too fast! Please wait.",
         'safe_link': "✅ This is an **official and trusted** resource.",
         'danger_link': "🚨 **ATTENTION! DANGEROUS LINK!** This might be a scam.",
-        'warning_link': "⚠️️ **Unknown link.** Be careful when entering your personal data.",
+        'warning_link': "⚠ **Unknown link.** Be careful when entering your personal data.",
         'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
         'ai_header': "🤖 **AI Analysis:**",
         'clean': "✅ No dangerous elements found, but stay vigilant."
@@ -248,6 +251,28 @@ async def cmd_broadcast(message: Message):
             pass
     await message.answer(f"✅ Xabar {success} ta foydalanuvchiga yuborildi.")
 
+@dp.message(F.photo)
+async def handle_photo(message: Message):
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
+    
+    photo = message.photo[-1]
+    file = await bot.get_file(photo.file_id)
+    file_bytes = await bot.download_file(file.file_path)
+    
+    image = Image.open(BytesIO(file_bytes.read()))
+    
+    await message.answer("🔄 Rasm va QR-kod tahlil qilinmoqda, biroz kuting...")
+    
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=["Ushbu rasm yoki QR-kod ichidagi matn, havolalarni o'qing va ularda firibgarlik (scam/phishing) xavfi bor-yo'qligini qisqacha tushuntirib bering:", image]
+        )
+        await message.answer(f"🤖 **Rasm tahlili natijasi:**\n\n{response.text}")
+    except Exception:
+        await message.answer("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
+
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -281,7 +306,6 @@ async def handle_message(message: Message):
     await message.answer("\n\n".join(response_parts))
 
 async def main():
-    # Render port talabini qondirish uchun HTTP serverni alohida oqimda (thread) ishga tushiramiz
     threading.Thread(target=run_http_server, daemon=True).start()
     print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
