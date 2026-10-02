@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 # Bot tokeningizni shu yerga qo'shtirnoq ichiga yozing
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8963497136:AAF44_6VpG5Uw4rlTjWS7kYUDv1HA8Bp0Jw"
 
 # Maksimal kengaytirilgan shubhali domen oxirlari (TLD)
 SUSPICIOUS_TLDS = [
