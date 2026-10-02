@@ -13,10 +13,9 @@ from aiogram.filters import Command
 from aiogram.types import Message, InlineQuery, InlineQueryResultArticle, InputTextMessageContent, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from google import genai
 from PIL import Image
-from pyzbar.pyzbar import decode
 
 TOKEN = os.environ.get("8963497136:AAF44_6VpG5Uw4rlTjWS7kYUDv1HA8Bp0Jw")
-ADMIN_ID = 5081583283  # O'z Telegram ID raqamingizni yozing (admin huquqlari uchun)
+ADMIN_ID = 5081583283  # O'z Telegram ID raqamingizni yozing
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -78,7 +77,7 @@ def get_all_users():
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV, QR-kodlar va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola, xabar matni yoki shubhali QR-kod rasmini yuboring!",
+        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola yoki xabar matnini yuboring!",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
@@ -90,7 +89,7 @@ TEXTS = {
         'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling."
     },
     'ru': {
-        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок, QR-кодов и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку, текст или QR-код!",
+        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку или текст!",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
         'spam': "⚠️ Слишком частые запросы! Пожалуйста, подождите.",
@@ -102,13 +101,13 @@ TEXTS = {
         'clean': "✅ Опасных признаков не обнаружено, но будьте бдительны."
     },
     'en': {
-        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, QR codes, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link, text, or QR code image!",
+        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link or text!",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
         'spam': "⚠️ You are sending messages too fast! Please wait.",
         'safe_link': "✅ This is an **official and trusted** resource.",
         'danger_link': "🚨 **ATTENTION! DANGEROUS LINK!** This might be a scam.",
-        'warning_link': "⚠️ **Unknown link.** Be careful when entering your personal data.",
+        'warning_link': "⚠️️ **Unknown link.** Be careful when entering your personal data.",
         'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
         'ai_header': "🤖 **AI Analysis:**",
         'clean': "✅ No dangerous elements found, but stay vigilant."
@@ -140,6 +139,7 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# Render port talab qilgani uchun oddiy HTTP server
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -248,29 +248,6 @@ async def cmd_broadcast(message: Message):
             pass
     await message.answer(f"✅ Xabar {success} ta foydalanuvchiga yuborildi.")
 
-@dp.message(F.photo)
-async def handle_photo(message: Message):
-    user_id = message.from_user.id
-    lang = get_user_lang(user_id)
-    
-    # QR-kodni rasm ichidan o'qish
-    photo = message.photo[-1]
-    file_info = await bot.get_file(photo.file_id)
-    file_bytes = await bot.download_file(file_info.file_path)
-    
-    try:
-        image = Image.open(BytesIO(file_bytes.read()))
-        decoded_objects = decode(image)
-        if decoded_objects:
-            qr_data = decoded_objects[0].data.decode('utf-8')
-            analysis = analyze_link(qr_data, lang)
-            await message.answer(f"📷 **QR-kod ichidan havola topildi:**\n`{qr_data}`\n\n{analysis}")
-            return
-    except Exception:
-        pass
-    
-    await message.answer("❌ Rasm ichidan QR-kod topilmadi yoki uni o'qib bo'lmadi.")
-
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -304,6 +281,7 @@ async def handle_message(message: Message):
     await message.answer("\n\n".join(response_parts))
 
 async def main():
+    # Render port talabini qondirish uchun HTTP serverni alohida oqimda (thread) ishga tushiramiz
     threading.Thread(target=run_http_server, daemon=True).start()
     print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
