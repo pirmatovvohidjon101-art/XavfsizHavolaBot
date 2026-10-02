@@ -1,1 +1,4 @@
 aiogram
+google-genai
+Pillow
+pyzbar
