@@ -14,7 +14,7 @@ from aiogram.types import Message, InlineQuery, InlineQueryResultArticle, InputT
 from google import genai
 from PIL import Image
 
-TOKEN = os.environ.get("8963497136:AAF44_6VpG5Uw4rlTjWS7kYUDv1HA8Bp0Jw")
+TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 5081583283  # O'z Telegram ID raqamingizni yozing
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
