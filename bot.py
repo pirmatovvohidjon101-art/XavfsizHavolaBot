@@ -1,13 +1,16 @@
 import asyncio
 import logging
 import re
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineQuery, InlineQueryResultArticle, InputTextMessageContent
 
 TOKEN = "8963497136:AAF44_6VpG5Uw4rlTjWS7kYUDv1HA8Bp0Jw"
-ADMIN_ID = 123456789  # O'z Telegram ID raqamingizni yozing
+ADMIN_ID = 5081583283  # O'z Telegram ID raqamingizni yozing
 
 stats = {
     "checked_count": 0,
@@ -43,6 +46,18 @@ SCAM_WORDS = [
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# Render port talabini qondirish uchun kichik veb-server
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
 
 def extract_url(text: str) -> str:
     url_pattern = re.compile(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
@@ -153,7 +168,10 @@ async def handle_message(message: Message):
     await message.answer("\n\n".join(response_parts), parse_mode="Markdown")
 
 async def main():
-    print("Bot ishga tushdi...")
+    # Veb-serverni alohida oqimda ishga tushiramiz (Render port talabi uchun)
+    threading.Thread(target=run_http_server, daemon=True).start()
+    
+    print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
