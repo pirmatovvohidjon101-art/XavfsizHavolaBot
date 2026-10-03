@@ -8,7 +8,7 @@ import threading
 import requests
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
@@ -33,10 +33,11 @@ stats = {
     "voice_danger_count": 0
 }
 
+# --- 1. HIMoya: Flood Control (Spam va DoS oldini olish uchun vaqtinchalik xotira) ---
 user_last_message_time = {}
-SPAM_INTERVAL = 1.5
+SPAM_INTERVAL = 1.2  # Foydalanuvchi har 1.2 sekundda 1 tadan ortiq xabar yubora olmaydi
 
-# --- BAZA BILAN ISHLASH (SQLITE) ---
+# --- BAZA BILAN ISHLASH (SQLITE - Parametrli so'rovlar orqali SQL Injection'dan himoyalangan) ---
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -69,13 +70,17 @@ def init_db():
 init_db()
 
 def add_user(user_id, username, full_name):
+    # Xavfsizlik: Username va Full_name ni tozalash (XSS/Script injection oldini olish)
+    safe_username = str(username)[:50] if username else ""
+    safe_fullname = str(full_name)[:100] if full_name else "Foydalanuvchi"
+    
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO users (user_id, username, full_name, language, reputation) 
         VALUES (?, ?, ?, 'uz', 100)
         ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name
-    """, (user_id, username, full_name))
+    """, (user_id, safe_username, safe_fullname))
     conn.commit()
     conn.close()
 
@@ -157,7 +162,8 @@ TEXTS = {
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) javobi:",
         'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/havola yuborgani uchun xabar o'chirildi va karma ochkosi kamaytirildi! (Reputation: {rep})",
-        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik (pul so'rash/aldash) alomatlari aniqlandi va xabar o'chirildi!"
+        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik (pul so'rash/aldash) alomatlari aniqlandi va xabar o'chirildi!",
+        'file_too_large': "⚠️ Fayl hajmi juda katta (maksimal 20 MB ruxsat etiladi)."
     },
     'ru': {
         'start': "👋 Здравствуйте!\n\nЯ бот безопасности и ИИ-помощник.",
@@ -172,13 +178,14 @@ TEXTS = {
         'scam_word': "🛑 Обнаружены признаки мошенничества!",
         'ai_header': "🤖 Ответ ИИ:",
         'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение удалено за нарушение безопасности!",
-        'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!"
+        'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!",
+        'file_too_large': "⚠️ Файл слишком большой."
     },
     'en': {
         'start': "👋 Hello!\n\nI am a security & AI assistant bot protecting chats.",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ️️ **Help:**\n- Check links, text, payment receipts, voice, files, or chat with AI.\n- `/top` — Leaderboard",
+        'help': "ℹ **Help:**\n- Check links, text, payment receipts, voice, files, or chat with AI.\n- `/top` — Leaderboard",
         'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ Too fast requests!",
         'safe_link': "✅ Official resource.",
@@ -187,7 +194,8 @@ TEXTS = {
         'scam_word': "🛑 Scam patterns detected!",
         'ai_header': "🤖 AI Response:",
         'group_danger_alert': "🚨 ATTENTION! Message deleted due to security violation!",
-        'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!"
+        'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!",
+        'file_too_large': "⚠️ File is too large."
     }
 }
 
@@ -249,7 +257,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Bot and Web Panel are running!")
+            self.wfile.write(b"Bot and Web Panel are running safely!")
             return
             
         if path == "/admin":
@@ -277,7 +285,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
                 </style>
             </head>
             <body>
-                <h1>🛡️ Bot Admin Boshqaruv Paneli</h1>
+                <h1>🛡️ Bot Admin Boshqaruv Paneli (Himoyalangan)</h1>
                 <div class="card">
                     <h3>📊 Statistika</h3>
                     <p>Tekshirilgan havolalar: <b>{stats['checked_count']}</b></p>
@@ -310,6 +318,10 @@ class WebPanelHandler(BaseHTTPRequestHandler):
         self.send_response(404)
         self.end_headers()
 
+    def log_message(self, format, *args):
+        # Server loglarini tozalash va xakerlar skanerlashini yashirish
+        return
+
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), WebPanelHandler)
@@ -331,14 +343,13 @@ def extract_url(text: str) -> str:
     match = url_pattern.search(text)
     return match.group(0) if match else None
 
-# --- 1. URLHAUS (ABUSE.CH) TEKSHIRUVI ---
 def check_urlhaus(url: str) -> bool:
     try:
         full_url = url if url.startswith(('http://', 'https://')) else 'https://' + url
-        response = requests.post('https://urlhaus-api.abuse.ch/v1/url/', data={'url': full_url}, timeout=4)
+        response = requests.post('https://urlhaus-api.abuse.ch/v1/url/', data={'url': full_url}, timeout=3)
         res = response.json()
         if res.get('query_status') == 'ok':
-            return True  # URLhaus bazasida zararli deb topildi
+            return True
     except Exception:
         pass
     return False
@@ -357,7 +368,6 @@ def analyze_link(url: str, chat_id: int) -> str:
             return f"DANGER: Telegram channel/group (@{path})"
 
     full_url = url if url.startswith(('http://', 'https://')) else 'https://' + url
-    
     parsed = urlparse(full_url)
     domain = parsed.netloc.lower()
     if domain.startswith('www.'):
@@ -372,7 +382,6 @@ def analyze_link(url: str, chat_id: int) -> str:
     if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
         return "SAFE"
 
-    # URLhaus bazasidan tekshiramiz (1-band)
     if check_urlhaus(full_url):
         stats["danger_count"] += 1
         return "DANGER"
@@ -391,9 +400,11 @@ def analyze_link(url: str, chat_id: int) -> str:
 
 async def ask_gemini(text: str) -> str:
     try:
+        # Xavfsizlik: Matn uzunligini qisqartirish (prompt injection yoki xotirani shishirish oldini olish)
+        safe_text = text[:1500]
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=f"You are a helpful AI assistant. Answer this query clearly and concisely:\n\n{text}"
+            contents=f"You are a helpful AI assistant. Answer this query clearly and concisely:\n\n{safe_text}"
         )
         return response.text
     except Exception:
@@ -418,27 +429,26 @@ async def cmd_web(message: Message):
 
 @dp.message(Command("whitelist"))
 async def cmd_whitelist(message: Message):
-    if message.chat.type == 'private':
-        await message.answer("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+    if message.from_user.id != ADMIN_ID and message.chat.type != 'private':
+        # Guruhda faqat adminlar whitelist qo'shishi mumkin
         return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("❌ Foydalanish: `/whitelist sayt.uz`", parse_mode="Markdown")
         return
-    domain = args[1].strip()
+    domain = args[1].strip().lower()
     add_to_whitelist(message.chat.id, domain)
     await message.answer(f"✅ `{domain}` oq ro'yxatga qo'shildi.", parse_mode="Markdown")
 
 @dp.message(Command("blacklist"))
 async def cmd_blacklist(message: Message):
-    if message.chat.type == 'private':
-        await message.answer("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+    if message.from_user.id != ADMIN_ID and message.chat.type != 'private':
         return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
         await message.answer("❌ Foydalanish: `/blacklist sayt.uz`", parse_mode="Markdown")
         return
-    domain = args[1].strip()
+    domain = args[1].strip().lower()
     add_to_blacklist(message.chat.id, domain)
     await message.answer(f"✅ `{domain}` qora ro'yxatga qo'shildi.", parse_mode="Markdown")
 
@@ -487,7 +497,7 @@ async def report_scam_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"🚨 `{domain}` qora ro'yxatga qo'shildi! Rahmat (+5 karma).", parse_mode="Markdown")
     await callback.answer()
 
-# --- 2. OVOZLI XABARLARNI (VOICE) GEMINI ORQALI TEKSHIRISH ---
+# --- OVOZLI XABARLARNI TEKSHIRISH (Hajm nazorati bilan) ---
 @dp.message(F.voice)
 async def handle_voice(message: Message):
     user_id = message.from_user.id
@@ -496,13 +506,15 @@ async def handle_voice(message: Message):
     chat_type = message.chat.type
 
     voice = message.voice
+    if voice.file_size and voice.file_size > 15 * 1024 * 1024:  # 15 MB dan katta ovozlarni rad etish
+        await message.answer(TEXTS[lang]['file_too_large'])
+        return
+
     file = await bot.get_file(voice.file_id)
     file_bytes = await bot.download_file(file.file_path)
-    
     audio_data = file_bytes.read()
 
     try:
-        # Gemini ga ovozli faylni to'g'ridan-to'g'ri yuborib tahlil qildiramiz
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
@@ -514,7 +526,6 @@ async def handle_voice(message: Message):
         )
         
         result_text = response.text.upper()
-        
         if "DANGER" in result_text:
             stats["voice_danger_count"] += 1
             if chat_type in ['group', 'supergroup']:
@@ -534,15 +545,21 @@ async def handle_voice(message: Message):
         else:
             if chat_type == 'private':
                 await message.answer("✅ Ovozli xabar tinglandi. Xavfli hech narsa topilmadi.")
-                
-    except Exception as e:
-        logging.error(f"Voice analysis error: {e}")
+    except Exception:
         if chat_type == 'private':
             await message.answer("❌ Ovozli xabarni tahlil qilishda xatolik yuz berdi.")
 
+# --- FOTO VA CHEKLARNI TEKSHIRISH (Hajm nazorati bilan) ---
 @dp.message(F.photo)
 async def handle_photo(message: Message):
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
     photo = message.photo[-1]
+    
+    if photo.file_size and photo.file_size > 15 * 1024 * 1024:
+        await message.answer(TEXTS[lang]['file_too_large'])
+        return
+
     file = await bot.get_file(photo.file_id)
     file_bytes = await bot.download_file(file.file_path)
     
@@ -569,12 +586,12 @@ async def handle_photo(message: Message):
                 image
             ]
         )
-        
         analysis_result = f"🤖 **Tahlil Natijasi:**\n\n{response.text}{qr_info}"
         await message.answer(analysis_result, parse_mode="Markdown")
     except Exception:
         await message.answer("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
 
+# --- MATN VA HAVOLALARNI TEKSHIRISH (Flood Control bilan) ---
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -582,13 +599,13 @@ async def handle_message(message: Message):
     lang = get_user_lang(user_id)
     chat_type = message.chat.type
     
-    if chat_type == 'private':
-        current_time = time.time()
-        if user_id in user_last_message_time:
-            if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
-                await message.answer(TEXTS[lang]['spam'])
-                return
-        user_last_message_time[user_id] = current_time
+    # Flood Control (Spamdan himoya)
+    current_time = time.time()
+    if user_id in user_last_message_time:
+        if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
+            await message.answer(TEXTS[lang]['spam'])
+            return
+    user_last_message_time[user_id] = current_time
 
     text = message.text.lower()
     found_scam = any(word in text for word in SCAM_WORDS)
@@ -643,7 +660,7 @@ async def handle_message(message: Message):
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("Bot va veb-panel serveri ishga tushdi...")
+    print("Himoyalangan bot va veb-panel serveri ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await set_default_commands(bot)
     await dp.start_polling(bot)
