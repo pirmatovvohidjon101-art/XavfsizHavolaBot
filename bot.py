@@ -30,7 +30,8 @@ stats = {
     "checked_count": 0,
     "danger_count": 0,
     "file_danger_count": 0,
-    "voice_danger_count": 0
+    "voice_danger_count": 0,
+    "video_danger_count": 0
 }
 
 user_last_message_time = {}
@@ -148,44 +149,46 @@ def is_blacklisted(chat_id, domain):
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va AI yordamchi botiman. Guruhlarda shubhali havolalar, zararli fayllar va APK dasturlarni nazorat qilaman.",
-        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n📦 Xavfli fayllar: {file_danger}\n🎙️ Xavfli ovozlar: {voice}\n👥 Foydalanuvchilar: {users}",
+        'start': "👋 Assalomu alaykum!\n\nMen to'liq himoyalangan AI xavfsizlik botiman. Havolalar, fayllar, cheklar, ovozli xabarlar va Deepfake videolarni nazorat qilaman.",
+        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n📦 Xavfli fayllar: {file_danger}\n🎙️ Xavfli ovozlar: {voice}\n🎬 Feyk/Deepfake videolar: {video}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ **Qo'llanma:**\n- Havola, fayl, APK, ovozli xabar yoki to'lov cheki yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli havolasi",
+        'help': "ℹ️ **Qo'llanma:**\n- Havola, fayl, APK, ovozli xabar, chek yoki video yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
-        'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i yoki zararli sayt aniqlandi.",
-        'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
+        'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i aniqlandi.",
+        'warning_link': "⚠️ Noma'lum havola. Ehtiyot bo'ling!",
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) javobi:",
-        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/fayl yuborgani uchun xabar o'chirildi va karma kamaytirildi! (Reputation: {rep})",
-        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik (pul so'rash/aldash) alomatlari aniqlandi va xabar o'chirildi!",
-        'file_danger': "🚨 DIQQAT! Ushbu fayl (APK/Zararli dastur) xavfli deb topildi va o'chirildi!",
+        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli kontent yuborgani uchun xabar o'chirildi va karma kamaytirildi! (Reputation: {rep})",
+        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik alomatlari aniqlandi!",
+        'file_danger': "🚨 DIQQAT! Zararli fayl (APK/Malware) bloklandi!",
+        'video_danger': "🚨 DIQQAT! Ushbu videoda Deepfake / soxta montaj va firibgarlik alomatlari aniqlandi!",
         'file_too_large': "⚠️ Fayl hajmi juda katta (maksimal 20 MB ruxsat etiladi)."
     },
     'ru': {
         'start': "👋 Здравствуйте!\n\nЯ бот безопасности и ИИ-помощник.",
-        'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n📦 Опасных файлов: {file_danger}\n👥 Пользователей: {users}",
+        'stats': "📊 **Статистика:**\n\n🔍 Проверено: {checked}\n🎬 Deepfake видео: {video}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
-        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, файлы, APK, чеки, голосовые.",
-        'lang_prompt': "🌐 Пожалуйста, выберите язык:",
+        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, файлы, чеки, видео, голосовые.",
+        'lang_prompt': "🌐 Выберите язык:",
         'spam': "⚠️ Слишком частые запросы!",
-        'safe_link': "✅ Это официальный ресурс.",
-        'danger_link': "🚨 ВНИМАНИЕ! ОПАСНАЯ ССЫЛКА!",
+        'safe_link': "✅ Официальный ресурс.",
+        'danger_link': "🚨 ОПАСНАЯ ССЫЛКА!",
         'warning_link': "⚠️ Неизвестная ссылка.",
         'scam_word': "🛑 Обнаружены признаки мошенничества!",
         'ai_header': "🤖 Ответ ИИ:",
-        'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение удалено за нарушение безопасности!",
-        'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!",
-        'file_danger': "🚨 ВНИМАНИЕ! Файл (APK/вредоносное ПО) заблокирован!",
+        'group_danger_alert': "🚨 Сообщение удалено за нарушение безопасности!",
+        'voice_danger': "🚨 В голосовом сообщении обнаружены угрозы!",
+        'file_danger': "🚨 Вредоносный файл заблокирован!",
+        'video_danger': "🚨 Внимание! Обнаружено Deepfake / мошенническое видео!",
         'file_too_large': "⚠️ Файл слишком большой."
     },
     'en': {
         'start': "👋 Hello!\n\nI am a security & AI assistant bot protecting chats.",
-        'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n📦 Dangerous files: {file_danger}\n👥 Users: {users}",
+        'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🎬 Deepfake videos: {video}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ **Help:**\n- Check links, files, APK, payment receipts, voice.",
+        'help': "ℹ **Help:**\n- Check links, files, voice, receipts, videos.",
         'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ Too fast requests!",
         'safe_link': "✅ Official resource.",
@@ -193,15 +196,15 @@ TEXTS = {
         'warning_link': "⚠️ Unknown link.",
         'scam_word': "🛑 Scam patterns detected!",
         'ai_header': "🤖 AI Response:",
-        'group_danger_alert': "🚨 ATTENTION! Message deleted due to security violation!",
-        'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!",
-        'file_danger': "🚨 ATTENTION! Dangerous file (APK/Malware) blocked!",
+        'group_danger_alert': "🚨 Message deleted due to security violation!",
+        'voice_danger': "🚨 Scam detected in voice message!",
+        'file_danger': "🚨 Dangerous file blocked!",
+        'video_danger': "🚨 ATTENTION! Deepfake or fraudulent video detected!",
         'file_too_large': "⚠️ File is too large."
     }
 }
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
-
 DANGEROUS_FILE_EXTENSIONS = ['.apk', '.exe', '.bat', '.scr', '.js', '.vbs', '.cmd', '.msi', '.pif', '.com']
 
 OFFICIAL_DOMAINS = {
@@ -294,6 +297,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
                     <p>Bloklangan xavfli havolalar: <b>{stats['danger_count']}</b></p>
                     <p>Bloklangan xavfli fayllar: <b>{stats['file_danger_count']}</b></p>
                     <p>Xavfli ovozli xabarlar: <b>{stats['voice_danger_count']}</b></p>
+                    <p>Feyk / Deepfake videolar: <b>{stats['video_danger_count']}</b></p>
                     <p>Jami foydalanuvchilar: <b>{len(users)}</b></p>
                 </div>
             </body>
@@ -481,7 +485,62 @@ async def report_scam_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"🚨 `{domain}` qora ro'yxatga qo'shildi! Rahmat (+5 karma).", parse_mode="Markdown")
     await callback.answer()
 
-# --- 1. FAYLLAR VA APK (ANTIVIRUS) TEKSHIRUVI ---
+# --- 4. DEEPFAKE VA VIDEO-FEYK ANIQLASH MODULI ---
+@dp.message(F.video | F.video_note)
+async def handle_video(message: Message):
+    user_id = message.from_user.id
+    add_user(user_id, message.from_user.username, message.from_user.full_name)
+    lang = get_user_lang(user_id)
+    chat_type = message.chat.type
+
+    vid = message.video or message.video_note
+    if vid.file_size and vid.file_size > 20 * 1024 * 1024:
+        await message.answer(TEXTS[lang]['file_too_large'])
+        return
+
+    if chat_type == 'private':
+        await message.answer("🔄 Video va yumaloq xabar chuqur tahlil qilinmoqda (Deepfake / Feyk tekshiruvi)...")
+
+    file = await bot.get_file(vid.file_id)
+    file_bytes = await bot.download_file(file.file_path)
+    video_data = file_bytes.read()
+
+    try:
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                "Analyze this video carefully. Is this video a deepfake, digitally manipulated face swap, "
+                "or part of a financial scam / fraudulent investment scheme featuring fake prominent figures? "
+                "Answer strictly with 'DANGER' if it is a deepfake or scam video, or 'SAFE' if it is normal.",
+                {"mime_type": "video/mp4", "data": video_data}
+            ]
+        )
+        
+        result_text = response.text.upper()
+        if "DANGER" in result_text:
+            stats["video_danger_count"] += 1
+            if chat_type in ['group', 'supergroup']:
+                try:
+                    await message.delete()
+                    new_rep = update_user_rep(user_id, -30)
+                    name = message.from_user.full_name
+                    alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id, rep=new_rep)
+                    await message.answer(alert_text, parse_mode="Markdown")
+                    if new_rep <= 0:
+                        await bot.ban_chat_member(message.chat.id, user_id)
+                except Exception:
+                    pass
+                return
+            else:
+                await message.answer(TEXTS[lang]['video_danger'])
+        else:
+            if chat_type == 'private':
+                await message.answer("✅ Videoda deepfake yoki xavfli firibgarlik alomatlari topilmadi.")
+    except Exception:
+        if chat_type == 'private':
+            await message.answer("❌ Videoni tahlil qilishda xatolik yuz berdi (fayl formati mos kelmasligi mumkin).")
+
+# --- FAYLLAR VA APK (ANTIVIRUS) TEKSHIRUVI ---
 @dp.message(F.document)
 async def handle_document(message: Message):
     user_id = message.from_user.id
@@ -496,7 +555,6 @@ async def handle_document(message: Message):
         await message.answer(TEXTS[lang]['file_too_large'])
         return
 
-    # Fayl kengaytmasini tekshirish (.apk, .exe va hokazo)
     is_dangerous_file = any(file_name.endswith(ext) for ext in DANGEROUS_FILE_EXTENSIONS)
 
     if is_dangerous_file:
@@ -682,7 +740,7 @@ async def handle_message(message: Message):
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("Fayl filtri qo'shilgan bot va veb-panel serveri ishga tushdi...")
+    print("Deepfake va Video tekshiruv moduli qo'shilgan bot ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await set_default_commands(bot)
     await dp.start_polling(bot)
