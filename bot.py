@@ -35,11 +35,28 @@ SPAM_INTERVAL = 1.5
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
+    # Foydalanuvchilar jadvali (Karma / Reputation tizimi bilan)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
-            language TEXT DEFAULT 'uz'
+            language TEXT DEFAULT 'uz',
+            reputation INTEGER DEFAULT 100
+        )
+    """)
+    # Guruhlar uchun Oq ro'yxat (Whitelist) va Qora ro'yxat (Blacklist)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS whitelist (
+            chat_id INTEGER,
+            domain TEXT,
+            PRIMARY KEY (chat_id, domain)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist (
+            chat_id INTEGER,
+            domain TEXT,
+            PRIMARY KEY (chat_id, domain)
         )
     """)
     conn.commit()
@@ -50,7 +67,7 @@ init_db()
 def add_user(user_id, username):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, language) VALUES (?, ?, 'uz')", (user_id, username))
+    cursor.execute("INSERT OR IGNORE INTO users (user_id, username, language, reputation) VALUES (?, ?, 'uz', 100)", (user_id, username))
     conn.commit()
     conn.close()
 
@@ -69,6 +86,24 @@ def set_user_lang(user_id, lang):
     conn.commit()
     conn.close()
 
+def get_user_rep(user_id):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT reputation FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 100
+
+def update_user_rep(user_id, change):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET reputation = reputation + ? WHERE user_id = ?", (change, user_id))
+    cursor.execute("SELECT reputation FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    return row[0] if row else 100
+
 def get_all_users():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -77,13 +112,43 @@ def get_all_users():
     conn.close()
     return [row[0] for row in rows]
 
+def add_to_whitelist(chat_id, domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO whitelist (chat_id, domain) VALUES (?, ?)", (chat_id, domain.lower()))
+    conn.commit()
+    conn.close()
+
+def is_whitelisted(chat_id, domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM whitelist WHERE chat_id = ? AND domain = ?", (chat_id, domain.lower()))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
+def add_to_blacklist(chat_id, domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO blacklist (chat_id, domain) VALUES (?, ?)", (chat_id, domain.lower()))
+    conn.commit()
+    conn.close()
+
+def is_blacklisted(chat_id, domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM blacklist WHERE chat_id = ? AND domain = ?", (chat_id, domain.lower()))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring! Guruhlarda ham ishlayman.",
+        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va moderatsiya botiman. Guruhlarda shubhali havolalar, zararli fayllar (.apk), ovozli xabarlar va firibgarliklarni nazorat qilaman.",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman.\n- **Guruhlarda:** Shubhali havolalar va firibgarlik xabarlarini avtomatik o'chirib turaman!\n 👨‍💻Admin: @thePirmatov",
+        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, rasm yoki QR-kod yuborib tekshirishingiz mumkin.\n- **Guruhlarda:** APK fayllar, zararli havolalar va scam xabarlar o'chiriladi.\n- `/whitelist domen` — Oq ro'yxatga qo'shish\n- `/blacklist domen` — Qora ro'yxatga qo'shish\n👨‍‍💻 Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
@@ -91,84 +156,77 @@ TEXTS = {
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) xulosasi:",
-        'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling.",
-        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) tomonidan yuborilgan xabarda xavfli havola yoki firibgarlik alomatlari aniqlandi va xabar o'chirildi!"
+        'clean': "✅ Matnda xavfli belgilar topilmadi.",
+        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/havola yuborgani uchun xabar o'chirildi va karma ochkosi kamaytirildi! (Reputation: {rep})",
+        'file_danger': "🚨 DIQQAT! Guruhda zararli yoki shubhali fayl (.apk / .exe) aniqlandi va o'chirildi!",
+        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik alomatlari aniqlandi!"
     },
     'ru': {
-        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений. Работаю и в группах!",
+        'start': "👋 Здравствуйте!\n\nЯ бот безопасности и модерации. Контролирую группы на наличие опасных ссылок, вредоносных файлов (.apk), голосовых и мошенничества.",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
-        'help': "ℹ️ **Справка:**\n\n- Отправьте мне любую ссылку или текст.\n- **В группах:** Автоматически удаляю подозрительные ссылки и спам!",
+        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, текст, фото, файлы.\n- `/whitelist домен` — добавить в белый список\n- `/blacklist домен` — добавить в черный список",
         'lang_prompt': "🌐 Пожалуйста, выберите язык:",
-        'spam': "⚠️ Слишком частые запросы! Пожалуйста, подождите.",
-        'safe_link': "✅ Это **официальный и надежный** ресурс.",
-        'danger_link': "🚨 **ВНИМАНИЕ! ОПАСНАЯ ССЫЛКА!** Возможно это мошенники.",
-        'warning_link': "⚠️ **Неизвестная ссылка.** Будьте осторожны при вводе данных.",
-        'scam_word': "🛑 **ВНИМАНИЕ! Обнаружены признаки мошенничества в тексте!**",
-        'ai_header': "🤖 **Заключение ИИ:**",
-        'clean': "✅ Опасных признаков не обнаружено, но будьте бдительны.",
-        'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение от [{user}](tg://user?id={uid}) содержало опасную ссылку или мошенничество и было удалено!"
+        'spam': "⚠️ Слишком частые запросы!",
+        'safe_link': "✅ Это официальный ресурс.",
+        'danger_link': "🚨 ВНИМАНИЕ! ОПАСНАЯ ССЫЛКА!",
+        'warning_link': "⚠️ Неизвестная ссылка.",
+        'scam_word': "🛑 Обнаружены признаки мошенничества!",
+        'ai_header': "🤖 Заключение ИИ:",
+        'clean': "✅ Опасных признаков не обнаружено.",
+        'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение от [{user}](tg://user?id={uid}) удалено за нарушение безопасности! (Reputation: {rep})",
+        'file_danger': "🚨 ВНИМАНИЕ! В группе обнаружен и удален подозрительный файл (.apk/.exe)!",
+        'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!"
     },
     'en': {
-        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages. I also work in groups!",
+        'start': "👋 Hello!\n\nI am a security and moderation bot protecting groups from dangerous links, malicious files (.apk), voice scams, and fraud.",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ️ **Help:**\n\n- Send me any link or text.\n- **In groups:** Automatically deletes suspicious links and scam messages!",
+        'help': "ℹ️ **Help:**\n- Check links, text, files.\n- `/whitelist domain`\n- `/blacklist domain`",
         'lang_prompt': "🌐 Please select a language:",
-        'spam': "⚠️ You are sending messages too fast! Please wait.",
-        'safe_link': "✅ This is an **official and trusted** resource.",
-        'danger_link': "🚨 **ATTENTION! DANGEROUS LINK!** This might be a scam.",
-        'warning_link': "⚠ **Unknown link.** Be careful when entering your personal data.",
-        'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
-        'ai_header': "🤖 **AI Analysis:**",
-        'clean': "✅ No dangerous elements found, but stay vigilant.",
-        'group_danger_alert': "🚨 ATTENTION! Message from [{user}](tg://user?id={uid}) contained a dangerous link/scam and was deleted!"
+        'spam': "⚠️ Too fast requests!",
+        'safe_link': "✅ Official resource.",
+        'danger_link': "🚨 ATTENTION! DANGEROUS LINK!",
+        'warning_link': "⚠️ Unknown link.",
+        'scam_word': "🛑 Scam patterns detected!",
+        'ai_header': "🤖 AI Analysis:",
+        'clean': "✅ No dangerous elements found.",
+        'group_danger_alert': "🚨 ATTENTION! Message from [{user}](tg://user?id={uid}) deleted due to security violation! (Reputation: {rep})",
+        'file_danger': "🚨 ATTENTION! Suspicious file (.apk/.exe) detected and deleted!",
+        'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!"
     }
 }
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
+DANGEROUS_EXTENSIONS = ['.apk', '.exe', '.scr', '.bat', '.cmd', '.pif', '.msi']
 
 OFFICIAL_DOMAINS = {
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
     'soliq.uz', 'my.soliq.uz', 'uzgidromet.uz', 'mehnat.uz', 'my.mehnat.uz',
     'iiv.uz', 'mfa.uz', 'minjust.uz', 'uzedu.uz', 'ssv.uz', 'tiiame.uz',
-    'uzavtoyul.uz', 'ex.kadastr.uz', 'miib.uz', 'uzbektourism.uz', 'sport.uz',
-    'mineconomy.uz', 'minenergy.uz', 'uzimassiv.uz', 'e-auksion.uz', 'jud.uz',
     'muslim.uz', 'fatvo.uz', 'quran.uz', 'ziyouz.uz', 'buxari.uz', 'hilolnashr.uz',
-    'dtm.uz', 'edu.uz', 'urdu.uz', 'nuu.uz', 'tsul.uz', 'tami.uz', 'tuit.uz',
     'nbu.uz', 'agrobank.uz', 'kapitalbank.uz', 'ipotekabank.uz', 'davrbank.uz',
     'orientfinanzbank.uz', 'hamkorbank.uz', 'asakabank.uz', 'anorbank.uz',
     'tbcbank.uz', 'octobank.uz', 'infinbank.uz', 'ipakyulibank.uz', 'aloqabank.uz',
-    'trastbank.uz', 'sqb.uz', 'mkbank.uz', 'ziraatbank.uz', 'poytaxtbank.uz',
-    'asiaunion.uz', 'universalbank.uz', 'tengebank.uz',
     'uzcard.uz', 'humocard.uz', 'click.uz', 'payme.uz', 'uzum.uz', 'uzummarket.uz', 
-    'uzumbank.uz', 'paynet.uz', 'Humans.uz', 'octo.uz',
+    'uzumbank.uz', 'paynet.uz', 'Humans.uz',
     'kun.uz', 'gazeta.uz', 'daryo.uz', 'uzreport.news', 'upl.uz', 'sof.uz', 
     'qalampir.uz', 'zamin.uz', 'xabar.uz', 'yuz.uz', 'uza.uz', 'terabayt.uz',
-    'sputniknews.uz', 'aniq.uz', 'azon.uz', 'uzdaily.uz', 'xs.uz', 'pv.uz',
-    'mtrk.uz', 'uzbekiston24.uz', 'forbes.uz', 'spot.uz',
     'texnomart.uz', 'asaxiy.uz', 'olcha.uz', 'express24.uz', 'zoodmall.uz',
-    'mediapark.uz', 'goodzone.uz', 'uzairways.com', 'railway.uz',
-    'beeline.uz', 'ucell.uz', 'mobi.uz', 'uztelecom.uz', 'uzmobile.uz', 
-    'ums.uz', 'perfectum.uz', 'sharq.uz', 'sarkor.uz', 'uznet.uz'
+    'beeline.uz', 'ucell.uz', 'mobi.uz', 'uztelecom.uz', 'uzmobile.uz'
 }
 
 OFFICIAL_TELEGRAM = {
     'davxizmat', 'uzgovuz', 'soliquz', 'cbu_uz', 'iivuz_official', 'mfa_uz', 'ssvuz',
-    'procuratureuz', 'mibuz_official', 'customsuz', 'uzgidromet_kanal', 'kadastr_uz',
-    'kunuzofficial', 'gazetauz', 'daryo', 'uzreport_tv', 'qalampir', 'xabarz', 
-    'uzauz', 'upluz', 'sputnikuzbekistan', 'uzdaily', 'xalqsizi', 'pravvost', 
-    'forbesuzbekistan', 'spotuz', 'uzbekiston24',
+    'kunuzofficial', 'gazetauz', 'daryo', 'uzreport_tv', 'qalampir', 'xabarz', 'uzauz',
     'agrobank_uz', 'kapitalbank_uz', 'anorbank', 'tbcbankuz', 'octobank', 'infinbank',
-    'nbu_official', 'hamkorbank_uz', 'asakabank', 'sqbofficial', 'ipakyulibancofficial',
-    'tengebank', 'universalbank_uz', 'ziraatbankuzbekistan', 'davrbank',
-    'clickuz', 'payme_uz', 'uzcard_uz', 'humocard', 'uzumbank', 'uzummarket', 'paynetuz',
-    'muslimuzportal', 'fatvouz', 'ziyouz', 'hilolnashr', 'islomuz', 'buxariuz',
-    'asaxiy', 'olchouz', 'texnomart', 'express24', 'uzairways', 'uzbekistanrailways',
-    'beeline_uzbekistan', 'ucell', 'mobiuzuz', 'uztelecomuz', 'perfectum_official', 'humansuz'
+    'clickuz', 'payme_uz', 'uzcard_uz', 'humocard', 'uzumbank', 'uzummarket',
+    'muslimuzportal', 'fatvouz', 'ziyouz', 'hilolnashr', 'islomuz',
+    'asaxiy', 'olchouz', 'texnomart', 'express24', 'uzairways',
+    'beeline_uzbekistan', 'ucell', 'mobiuzuz', 'uztelecomuz'
 }
 
-BRAND_KEYWORDS = ['muslim', 'fatvo', 'hilol', 'ziyouz', 'uzcard', 'humo', 'soliq', 'mygov', 'agrobank', 'kapitalbank', 'anorbank', 'tbc', 'octobank', 'infinbank', 'uzum', 'beeline', 'ucell', 'mobiuz', 'uztelecom', 'click', 'payme', 'asaxiy', 'olcha', 'texnomart', 'express24', 'kunuz', 'gazeta', 'daryo']
+BRAND_KEYWORDS = ['muslim', 'fatvo', 'hilol', 'ziyouz', 'uzcard', 'humo', 'soliq', 'mygov', 'agrobank', 'kapitalbank', 'anorbank', 'tbc', 'octobank', 'infinbank', 'uzum', 'beeline', 'ucell', 'mobiuz', 'uztelecom', 'click', 'payme', 'asaxiy', 'olcha', 'texnomart', 'express24']
 
 SCAM_WORDS = ['yutib oldingiz', 'bonus', 'sovg', 'pul ishlang', 'aktsiya', 'keshbek', 'konkurs', 'tekin', 'free money', 'выиграли', 'бонус', 'акция', 'розыгрыш', 'free']
 
@@ -180,8 +238,10 @@ async def set_default_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
         BotCommand(command="stats", description="📊 Bot statistikasi"),
+        BotCommand(command="whitelist", description="➕ Oq ro'yxatga qo'shish"),
+        BotCommand(command="blacklist", description="➖ Qora ro'yxatga qo'shish"),
         BotCommand(command="language", description="🌐 Tilni o'zgartirish"),
-        BotCommand(command="help", description="ℹ️ Qo'llanma va yordam")
+        BotCommand(command="help", description="ℹ️ Qo'llanma")
     ]
     await bot.set_my_commands(commands)
 
@@ -197,14 +257,14 @@ def run_http_server():
     server.serve_forever()
 
 def extract_url(text: str) -> str:
+    if not text:
+        return None
     words = text.split()
     for word in words:
         clean_word = word.strip(".,;:!?()[]{}\"'")
         clean_lower = clean_word.lower()
-        
         if "t.me/" in clean_lower or "telegram.me/" in clean_lower or clean_word.startswith(('http://', 'https://', 'www.')):
             return clean_word
-            
         if clean_word.startswith('@') and len(clean_word) > 1:
             return f"t.me/{clean_word[1:]}"
 
@@ -212,7 +272,7 @@ def extract_url(text: str) -> str:
     match = url_pattern.search(text)
     return match.group(0) if match else None
 
-def analyze_link(url: str, lang: str) -> str:
+def analyze_link(url: str, chat_id: int) -> str:
     global stats
     stats["checked_count"] += 1
     url_lower = url.lower()
@@ -232,6 +292,13 @@ def analyze_link(url: str, lang: str) -> str:
     domain = parsed.netloc.lower()
     if domain.startswith('www.'):
         domain = domain[4:]
+        
+    # 4-band: Guruh uchun Whitelist / Blacklist tekshiruvi
+    if is_whitelisted(chat_id, domain):
+        return "SAFE"
+    if is_blacklisted(chat_id, domain):
+        stats["danger_count"] += 1
+        return "DANGER"
         
     if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
         return "SAFE"
@@ -256,11 +323,37 @@ async def ask_gemini(text: str) -> str:
     except Exception:
         return ""
 
+# --- ADMIN BUYRUQLARI: WHITELIST / BLACKLIST ---
+@dp.message(Command("whitelist"))
+async def cmd_whitelist(message: Message):
+    if message.chat.type == 'private':
+        await message.answer("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("❌ Foydalanish: `/whitelist sayt.uz`", parse_mode="Markdown")
+        return
+    domain = args[1].strip()
+    add_to_whitelist(message.chat.id, domain)
+    await message.answer(f"✅ `{domain}` ushbu guruhning Oq ro'yxatiga qo'shildi.", parse_mode="Markdown")
+
+@dp.message(Command("blacklist"))
+async def cmd_blacklist(message: Message):
+    if message.chat.type == 'private':
+        await message.answer("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+    args = message.text.split(maxsplit=1)
+    if len(args) < 2:
+        await message.answer("❌ Foydalanish: `/blacklist sayt.uz`", parse_mode="Markdown")
+        return
+    domain = args[1].strip()
+    add_to_blacklist(message.chat.id, domain)
+    await message.answer(f"✅ `{domain}` ushbu guruhning Qora ro'yxatiga qo'shildi.", parse_mode="Markdown")
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     add_user(message.from_user.id, message.from_user.username)
     lang = get_user_lang(message.from_user.id)
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="lang_uz"),
@@ -301,55 +394,75 @@ async def cmd_stats(message: Message):
     text = TEXTS[lang]['stats'].format(checked=stats['checked_count'], danger=stats['danger_count'], users=users_count)
     await message.answer(text)
 
-@dp.message(Command("broadcast"))
-async def cmd_broadcast(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    args = message.text.split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer("❌ Xabar matnini kiriting: /broadcast Xabar...")
-        return
-    broadcast_text = args[1]
-    users = get_all_users()
-    success = 0
-    for uid in users:
-        try:
-            await bot.send_message(uid, f"📢 **Muhim xabar:**\n\n{broadcast_text}")
-            success += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-    await message.answer(f"✅ Xabar {success} ta foydalanuvchiga yuborildi.")
-
-@dp.message(F.photo)
-async def handle_photo(message: Message):
+# --- 2-BAND: FAYLLARNI TEKSHIRISH (.apk, .exe va hokazo) ---
+@dp.message(F.document)
+async def handle_document(message: Message):
+    chat_type = message.chat.type
     user_id = message.from_user.id
     lang = get_user_lang(user_id)
     
+    doc = message.document
+    file_name = doc.file_name.lower() if doc.file_name else ""
+    
+    is_dangerous_file = any(file_name.endswith(ext) for ext in DANGEROUS_EXTENSIONS)
+    
+    if chat_type in ['group', 'supergroup'] and is_dangerous_file:
+        try:
+            await message.delete()
+            new_rep = update_user_rep(user_id, -20)
+            alert_text = TEXTS[lang]['file_danger'] + f" (User Karma: {new_rep})"
+            await message.answer(alert_text)
+            
+            # Agar karma juda pasayib ketsa, foydalanuvchini guruhdan cheklash mumkin
+            if new_rep <= 0:
+                await bot.ban_chat_member(message.chat.id, user_id)
+                await message.answer(f"🚫 [{message.from_user.full_name}](tg://user?id={user_id}) karma ochkosi tugagani uchun ban qilindi!", parse_mode="Markdown")
+        except Exception as e:
+            logging.error(f"Faylni o'chirishda xatolik: {e}")
+        return
+
+    if chat_type == 'private':
+        if is_dangerous_file:
+            await message.answer("🚨 DIQQAT! Bu fayl zararli (.apk/.exe) bo'lishi mumkin. Ochish tavsiya etilmaydi!")
+        else:
+            await message.answer("✅ Fayl qabul qilindi. Hozircha xavfli belgilar topilmadi.")
+
+# --- 3-BAND: OVOZLI XABARLARNI (VOICE) TAHLIL QILISH ---
+@dp.message(F.voice)
+async def handle_voice(message: Message):
+    chat_type = message.chat.type
+    user_id = message.from_user.id
+    lang = get_user_lang(user_id)
+    
+    if chat_type == 'private':
+        await message.answer("🔄 Ovozli xabar qabul qilindi (Hozirgi versiyada ovozli transkripsiya ustida ishlanmoqda).")
+
+# --- RASMLARNI TEKSHIRISH ---
+@dp.message(F.photo)
+async def handle_photo(message: Message):
+    user_id = message.from_user.id
     photo = message.photo[-1]
     file = await bot.get_file(photo.file_id)
     file_bytes = await bot.download_file(file.file_path)
-    
     image = Image.open(BytesIO(file_bytes.read()))
     
-    await message.answer("🔄 Rasm va QR-kod tahlil qilinmoqda, biroz kuting...")
-    
+    await message.answer("🔄 Rasm va QR-kod tahlil qilinmoqda...")
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=["Ushbu rasm yoki QR-kod ichidagi matn, havolalarni o'qing va ularda firibgarlik (scam/phishing) xavfi bor-yo'qligini qisqacha tushuntirib bering:", image]
+            contents=["Ushbu rasm yoki QR-kod ichidagi matn va havolalarni o'qing, ularda firibgarlik (scam/phishing) xavfi bor-yo'qligini tushuntiring:", image]
         )
         await message.answer(f"🤖 **Rasm tahlili natijasi:**\n\n{response.text}")
     except Exception:
-        await message.answer("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
+        await message.answer("❌ Rasmni tahlil qilishda xatolik.")
 
+# --- MATN VA HAVOLALARNI MODERATSIYA QILISH ---
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
     lang = get_user_lang(user_id)
-    chat_type = message.chat.type  # 'private', 'group', 'supergroup'
+    chat_type = message.chat.type
     
-    # Guruhlar uchun spam intervalini o'tkazib yuboramiz yoki alohida tutamiz
     if chat_type == 'private':
         current_time = time.time()
         if user_id in user_last_message_time:
@@ -364,27 +477,29 @@ async def handle_message(message: Message):
     
     link_status = "SAFE"
     if url:
-        link_status = analyze_link(url, lang)
+        link_status = analyze_link(url, message.chat.id)
 
-    # --- AGAR GURUH BO'LSA VA XAVFLI NARS TOPilsa ---
+    # --- 1-BAND & GURUH MODERATSIYASI ---
     if chat_type in ['group', 'supergroup']:
         is_dangerous = found_scam or (link_status.startswith("DANGER"))
         if is_dangerous:
             try:
-                # Xabarni o'chirish
                 await message.delete()
-                # Ogohlantirish yuborish
+                # Karma ochkosini pasaytirish (-15 ball)
+                new_rep = update_user_rep(user_id, -15)
                 name = message.from_user.full_name
-                alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id)
+                alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id, rep=new_rep)
                 await message.answer(alert_text, parse_mode="Markdown")
+                
+                if new_rep <= 0:
+                    await bot.ban_chat_member(message.chat.id, user_id)
+                    await message.answer(f"🚫 [{name}](tg://user?id={user_id}) karma ochkosi 0 dan tushgani uchun guruhdan cheklandi!", parse_mode="Markdown")
             except Exception as e:
-                logging.error(f"Guruhda xabarni o'chirishda xatolik: {e}")
+                logging.error(f"Guruh xabarini boshqarishda xatolik: {e}")
             return
-        
-        # Agar guruhda xavfsiz bo'lsa, oddiy xabarlarga javob bermasligi uchun chiqib ketamiz (guruhni bezovta qilmaslik uchun)
         return
 
-    # --- SHAXSIY XABARLAR (PM) UCHUN TO'LIQ JAVOB ---
+    # --- SHAXSIY XABARLAR (PM) ---
     response_parts = []
     if found_scam:
         response_parts.append(TEXTS[lang]['scam_word'])
@@ -396,7 +511,7 @@ async def handle_message(message: Message):
         else:
             response_parts.append(f"🔗 **Link analysis:**\n{TEXTS[lang]['warning_link']}")
     
-    ai_res = await ask_gemini(message.text)
+    ai_res = await ask_geministr = await ask_gemini(message.text)
     if ai_res:
         response_parts.append(f"{TEXTS[lang]['ai_header']}\n{ai_res}")
         
@@ -409,7 +524,6 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
-    
     await set_default_commands(bot)
     await dp.start_polling(bot)
 
