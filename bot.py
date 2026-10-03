@@ -85,7 +85,7 @@ TEXTS = {
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
         'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman. \n 👨‍💻Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
-        'spam': "⚠️️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
+        'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
         'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i bo'lishi mumkin.",
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
@@ -125,22 +125,72 @@ TEXTS = {
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
 
+# Barcha turdagi rasmiy va ishonchli domenlar bazasi
 OFFICIAL_DOMAINS = {
+    # Barcha davlat portal va vazirliklar (.gov.uz bilan tugaydigan barcha rasmiy saytlar)
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
     'soliq.uz', 'my.soliq.uz', 'uzgidromet.uz', 'mehnat.uz', 'my.mehnat.uz',
     'iiv.uz', 'mfa.uz', 'minjust.uz', 'uzedu.uz', 'ssv.uz', 'tiiame.uz',
-    'muslim.uz', 'fatvo.uz', 'quran.uz', 'ziyouz.uz', 'buxari.uz',
+    'uzavtoyul.uz', 'ex.kadastr.uz', 'miib.uz', 'uzbektourism.uz', 'sport.uz',
+    'mineconomy.uz', 'minenergy.uz', 'uzimassiv.uz', 'e-auksion.uz', 'jud.uz',
+    
+    # Barcha Respublika OAV (gazeta, jurnal, TV, radio va internet nashrlar)
+    'kun.uz', 'gazeta.uz', 'daryo.uz', 'uzreport.news', 'upl.uz', 'sof.uz', 
+    'qalampir.uz', 'zamin.uz', 'xabar.uz', 'yuz.uz', 'uza.uz', 'terabayt.uz',
+    'sputniknews.uz', 'aniq.uz', 'qalampir.uz', 'azon.uz', 'azon.uz', 'uzdaily.uz',
+    'xs.uz', 'pv.uz', 'iiv.uz', 'turon24.uz', 'parliament.uz', 'bbs.uz',
+    'mtrk.uz', 'uzbekiston24.uz', 'Yoshlar.tv', 'forbes.uz', 'spot.uz',
+    
+    # Barcha tijorat banklari va to'lov tashkilotlari
     'nbu.uz', 'agrobank.uz', 'kapitalbank.uz', 'ipotekabank.uz', 'davrbank.uz',
     'orientfinanzbank.uz', 'hamkorbank.uz', 'asakabank.uz', 'anorbank.uz',
     'tbcbank.uz', 'octobank.uz', 'infinbank.uz', 'ipakyulibank.uz', 'aloqabank.uz',
-    'trastbank.uz', 'sqb.uz', 'mkbank.uz', 'uzcard.uz', 'humocard.uz', 
-    'click.uz', 'payme.uz', 'uzum.uz', 'uzummarket.uz', 'paynet.uz',
-    'texnomart.uz', 'asaxiy.uz', 'olcha.uz', 'express24.uz', 'kun.uz', 'gazeta.uz', 'daryo.uz'
+    'trastbank.uz', 'sqb.uz', 'mkbank.uz', 'ziraatbank.uz', 'poytaxtbank.uz',
+    'asiaunion.uz', 'universalbank.uz', 'octobank.uz', 'tengebank.uz',
+    'uzcard.uz', 'humocard.uz', 'click.uz', 'payme.uz', 'uzum.uz', 'uzummarket.uz', 
+    'uzumbank.uz', 'paynet.uz', 'Humans.uz', 'octo.uz', 'Apelsin.uz',
+    
+    # Diniy idoralar va ta'lim muassasalari
+    'muslim.uz', 'fatvo.uz', 'quran.uz', 'ziyouz.uz', 'buxari.uz', 'hilolnashr.uz',
+    'dtm.uz', 'edu.uz', 'urdu.uz', 'nuu.uz', 'tsul.uz', 'tami.uz', 'tuit.uz',
+    
+    # Yirik savdo, xizmat ko'rsatish va marketpleyslar
+    'texnomart.uz', 'asaxiy.uz', 'olcha.uz', 'express24.uz', 'zoodmall.uz',
+    'uzum.market', 'mediapark.uz', 'goodzone.uz', 'uzairways.com', 'railway.uz',
+    
+    # Aloqa operatorlari va internet provayderlar
+    'beeline.uz', 'ucell.uz', 'mobi.uz', 'uztelecom.uz', 'uzmobile.uz', 
+    'ums.uz', 'perfectum.uz', 'sharq.uz', 'sarkor.uz', 'uznet.uz'
 }
 
-OFFICIAL_TELEGRAM = {'muslimuzportal', 'fatvouz', 'ziyouz', 'hilolnashr', 'islomuz', 'davxizmat', 'uzgovuz', 'soliquz', 'cbu_uz', 'agrobank_uz', 'kapitalbank_uz', 'anorbank', 'tbcbankuz', 'octobank', 'infinbank', 'kunuzofficial', 'gazetauz', 'daryo', 'asaxiy', 'olchouz', 'texnomart', 'uzummarket', 'clickuz', 'payme_uz', 'uzcard_uz'}
+# Telegramdagi barcha asosiy rasmiy kanallar va idoralar
+OFFICIAL_TELEGRAM = {
+    # Davlat va huquq-tartibot idoralari
+    'davxizmat', 'uzgovuz', 'soliquz', 'cbu_uz', 'iivuz_official', 'mfa_uz', 'ssvuz',
+    'procuratureuz', 'mibuz_official', 'customsuz', 'uzgidromet_kanal', 'kadastr_uz',
+    
+    # OAV va axborot agentliklari
+    'kunuzofficial', 'gazetauz', 'daryo', 'uzreport_tv', 'qalampir', 'xabarz', 
+    'uzauz', 'upluz', 'sputnikuzbekistan', 'uzdaily', 'xalqsizi', 'pravvost', 
+    'forbesuzbekistan', 'spotuz', 'uzbekiston24',
+    
+    # Banklar va moliya tuzilmalari
+    'agrobank_uz', 'kapitalbank_uz', 'anorbank', 'tbcbankuz', 'octobank', 'infinbank',
+    'nbu_official', 'hamkorbank_uz', 'asakabank', 'sqbofficial', 'ipakyulibancofficial',
+    'tengebank', 'universalbank_uz', 'ziraatbankuzbekistan', 'davrbank',
+    'clickuz', 'payme_uz', 'uzcard_uz', 'humocard', 'uzumbank', 'uzummarket', 'paynetuz',
+    
+    # Diniy va ma'rifiy kanallar
+    'muslimuzportal', 'fatvouz', 'ziyouz', 'hilolnashr', 'islomuz', 'buxariuz',
+    
+    # Brendlar, savdo va xizmatlar
+    'asaxiy', 'olchouz', 'texnomart', 'express24', 'uzairways', 'uzbekistanrailways',
+    
+    # Aloqa operatorlari
+    'beeline_uzbekistan', 'ucell', 'mobiuzuz', 'uztelecomuz', 'perfectum_official', 'humansuz'
+}
 
-BRAND_KEYWORDS = ['muslim', 'fatvo', 'hilol', 'ziyouz', 'uzcard', 'humo', 'soliq', 'mygov', 'agrobank', 'kapitalbank', 'anorbank', 'tbc', 'octobank', 'infinbank', 'uzum', 'beeline', 'ucell', 'mobiuz', 'uztelecom', 'click', 'payme', 'asaxiy', 'olcha', 'texnomart', 'express24']
+BRAND_KEYWORDS = ['muslim', 'fatvo', 'hilol', 'ziyouz', 'uzcard', 'humo', 'soliq', 'mygov', 'agrobank', 'kapitalbank', 'anorbank', 'tbc', 'octobank', 'infinbank', 'uzum', 'beeline', 'ucell', 'mobiuz', 'uztelecom', 'click', 'payme', 'asaxiy', 'olcha', 'texnomart', 'express24', 'kunuz', 'gazeta', 'daryo']
 
 SCAM_WORDS = ['yutib oldingiz', 'bonus', 'sovg', 'pul ishlang', 'aktsiya', 'keshbek', 'konkurs', 'tekin', 'free money', 'выиграли', 'бонус', 'акция', 'розыгрыш', 'free']
 
@@ -154,7 +204,7 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
         BotCommand(command="stats", description="📊 Bot statistikasi"),
         BotCommand(command="language", description="🌐 Tilni o'zgartirish"),
-        BotCommand(command="help", description="ℹ️️ Qo'llanma va yordam")
+        BotCommand(command="help", description="ℹ️ Qo'llanma va yordam")
     ]
     await bot.set_my_commands(commands)
 
@@ -174,13 +224,11 @@ def extract_url(text: str) -> str:
     words = text.split()
     for word in words:
         clean_word = word.strip(".,;:!?()[]{}\"'")
-        clean_lower = clean_word.lower()
+        clean_lower = word.lower()
         
-        # Telegram havolalari va boshqa veb havolalarni ushlash
         if "t.me/" in clean_lower or "telegram.me/" in clean_lower or clean_word.startswith(('http://', 'https://', 'www.')):
             return clean_word
             
-        # Agar foydalanuvchi @username yuborsa, uni ham tekshirish uchun formatlaymiz
         if clean_word.startswith('@') and len(clean_word) > 1:
             return f"t.me/{clean_word[1:]}"
 
@@ -209,7 +257,8 @@ def analyze_link(url: str, lang: str) -> str:
     if domain.startswith('www.'):
         domain = domain[4:]
         
-    if domain in OFFICIAL_DOMAINS:
+    # Asosiy qoida: Agar domen .gov.uz bilan tugasa, u avtomatik ravishda rasmiy davlat sayti hisoblanadi
+    if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
         return TEXTS[lang]['safe_link']
         
     for tld in SUSPICIOUS_TLDS:
