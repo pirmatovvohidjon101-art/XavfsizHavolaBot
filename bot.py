@@ -34,12 +34,13 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Hozirgi ishlayotgan modellar (fallback bilan)
+# Hozirgi eng yaxshi ishlayotgan modellar
 MODELS = [
     "gemini-2.5-flash-lite",
     "gemini-3.1-flash-lite",
     "gemini-2.5-flash",
     "gemini-3.6-flash",
+    "gemini-3.8-flash",
 ]
 
 stats = {
@@ -248,39 +249,48 @@ async def notify_admin(text: str):
         pass
 
 async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
-    """Bir nechta modelni ketma-ket sinab ko‘radi"""
+    """Bir nechta modelni sinaydi + 503 uchun retry"""
     last_error = ""
     for model in MODELS:
-        try:
-            response = ai_client.models.generate_content(
-                model=model,
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(data=data, mime_type=mime)
-                ]
-            )
-            logging.info(f"Muvaffaqiyatli model: {model}")
-            return response.text or ""
-        except Exception as e:
-            last_error = str(e)
-            logging.warning(f"Model {model} ishlamadi: {e}")
-            continue
-    return f"ERROR: Barcha modellar ishlamadi. Oxirgi xato: {last_error[:120]}"
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(
+                    model=model,
+                    contents=[
+                        prompt,
+                        types.Part.from_bytes(data=data, mime_type=mime)
+                    ]
+                )
+                logging.info(f"Muvaffaqiyatli model: {model}")
+                return response.text or ""
+            except Exception as e:
+                last_error = str(e)
+                logging.warning(f"{model} xato (urinish {attempt+1}): {e}")
+                if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
+                    await asyncio.sleep(2 + attempt * 2)
+                    continue
+                break
+    return f"ERROR: Barcha modellar band yoki ishlamayapti. Oxirgi xato: {last_error[:150]}"
 
 async def text_with_gemini(prompt: str) -> str:
-    """Faqat matn uchun (audit)"""
+    """Faqat matn uchun (audit) + retry"""
     last_error = ""
     for model in MODELS:
-        try:
-            response = ai_client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
-            return response.text or ""
-        except Exception as e:
-            last_error = str(e)
-            continue
-    return f"ERROR: {last_error[:120]}"
+        for attempt in range(3):
+            try:
+                response = ai_client.models.generate_content(
+                    model=model,
+                    contents=prompt
+                )
+                return response.text or ""
+            except Exception as e:
+                last_error = str(e)
+                logging.warning(f"{model} xato (urinish {attempt+1}): {e}")
+                if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
+                    await asyncio.sleep(2 + attempt * 2)
+                    continue
+                break
+    return f"ERROR: {last_error[:150]}"
 
 # ==================== HANDLERS ====================
 @dp.message(Command("start"))
@@ -716,7 +726,7 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot muvaffaqiyatli ishga tushdi (model fallback bilan)")
+    print("✅ Bot muvaffaqiyatli ishga tushdi (503 retry + fallback bilan)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
