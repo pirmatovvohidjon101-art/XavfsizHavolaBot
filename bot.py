@@ -80,17 +80,17 @@ def get_all_users():
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring!",
+        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring!",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ **Qo'llanma:**\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — Gemini AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman.",
+        'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman. \n 👨‍💻Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
-        'safe_link': "✅ Bu **rasmiy va ishonchli** manzil.",
-        'danger_link': "🚨 **DIQQAT! XAVFLI HAVOLA!** Firibgarlar tuzog'i bo'lishi mumkin.",
-        'warning_link': "⚠️ **Noma'lum havola.** Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
-        'scam_word': "🛑 **DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!**",
-        'ai_header': "🤖 **Sun'iy Intellekt (AI) xulosasi:**",
+        'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
+        'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i bo'lishi mumkin.",
+        'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
+        'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
+        'ai_header': "🤖 Sun'iy Intellekt (AI) xulosasi:",
         'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling."
     },
     'ru': {
