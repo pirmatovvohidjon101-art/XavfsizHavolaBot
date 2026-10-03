@@ -8,7 +8,7 @@ import threading
 import requests
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand, BufferedInputFile
@@ -61,15 +61,29 @@ def init_db():
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS blacklist (
-            chat_id INTEGER,
-            domain TEXT,
-            PRIMARY KEY (chat_id, domain)
+            domain TEXT PRIMARY KEY
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT,
+            details TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
     conn.close()
 
 init_db()
+
+def log_activity(user_id, action, details):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO activity_logs (user_id, action, details) VALUES (?, ?, ?)", (user_id, action, details))
+    conn.commit()
+    conn.close()
 
 def add_user(user_id, username, full_name):
     safe_username = str(username)[:50] if username else ""
@@ -111,22 +125,34 @@ def get_top_users(limit=10):
     conn.close()
     return rows
 
+def add_global_blacklist(domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO blacklist (domain) VALUES (?)", (domain.lower(),))
+    conn.commit()
+    conn.close()
+
+def is_globally_blacklisted(domain):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM blacklist WHERE domain = ?", (domain.lower(),))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
         'start': "👋 Assalomu alaykum!\n\nMen to'liq himoyalangan AI kiber-xavfsizlik botiman. Havolalar, fayllar, ovozli xabarlar, Deepfake videolar, skrinshotlar va Avtonom Kiber-Detektor funksiyalariga egaman.",
-        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n🕵️‍♂️ Kiber-Auditlar: {audit}\n📸 Skrinshotlar: {screenshot}\n🎙️ Ovozli vishinglar: {voice}\n🎬 Feyk videolar: {video}\n👥 Foydalanuvchilar: {users}",
+        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n🕵️‍♂️ Kiber-Auditlar: {audit}\n📸 Skrinshotlar: {screenshot}\n🎙️ Ovozli vishinglar: {voice}\n👥 Foydalanuvchilar: {users}",
         'help': "ℹ️ **Qo'llanma:**\n- `/audit <kanal_oki_havola>` — Avtonom detektiv tekshiruvi\n- Istalgan havola, fayl, video yoki ovozli xabar yuboring.",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
         'danger_link': "🚨 DIQQAT! XAVFLI / PHISHING HAVOLA ANIQLANDI!",
-        'voice_danger': "🚨 DIQQAT! Ovozli xabarda Vishing / Voice Cloning (sun'iy ovoz) alomatlari aniqlandi!",
+        'voice_danger': "🚨 DIQQAT! Ovozli xabarda Vishing / Voice Cloning alomatlari aniqlandi!",
         'file_too_large': "⚠️ Fayl hajmi juda katta."
     }
 }
-
-SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
-DANGEROUS_FILE_EXTENSIONS = ['.apk', '.exe', '.bat', '.scr', '.js', '.vbs', '.cmd', '.msi', '.pif', '.com']
 
 OFFICIAL_DOMAINS = {
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
@@ -144,9 +170,6 @@ OFFICIAL_DOMAINS = {
     'beeline.uz', 'ucell.uz', 'mobi.uz', 'uztelecom.uz', 'uzmobile.uz'
 }
 
-BRAND_KEYWORDS = ['muslim', 'fatvo', 'hilol', 'ziyouz', 'uzcard', 'humo', 'soliq', 'mygov', 'agrobank', 'kapitalbank', 'anorbank', 'tbc', 'octobank', 'infinbank', 'uzum', 'beeline', 'ucell', 'mobiuz', 'uztelecom', 'click', 'payme', 'asaxiy', 'olcha', 'texnomart', 'express24']
-SCAM_WORDS = ['yutib oldingiz', 'bonus', 'sovg', 'pul ishlang', 'aktsiya', 'keshbek', 'konkurs', 'tekin', 'free money', 'выиграли', 'бонус', 'акция', 'розыгрыш', 'free']
-
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -154,7 +177,7 @@ dp = Dispatcher()
 async def set_default_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
-        BotCommand(command="audit", description="🕵️‍♂️ Kiber-Detektiv audit"),
+        BotCommand(command="audit", description="🕵️‍♂️️ Kiber-Detektiv audit"),
         BotCommand(command="stats", description="📊 Bot statistikasi"),
         BotCommand(command="top", description="🏆 Reyting"),
         BotCommand(command="web", description="🌐 Admin veb-paneli"),
@@ -162,7 +185,7 @@ async def set_default_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands)
 
-# --- WEB PANEL ---
+# --- KENGAYTirilgan KENG ADMIN VEB-PANEL ---
 class WebPanelHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urlparse(self.path)
@@ -170,7 +193,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Bot and Web Panel are running safely!")
+            self.wfile.write(b"Bot and Enhanced Web Panel are running safely!")
             return
             
         if parsed_path.path == "/admin":
@@ -178,18 +201,88 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, username, full_name, reputation FROM users")
             users = cursor.fetchall()
+            
+            cursor.execute("SELECT domain FROM blacklist")
+            blacklisted = cursor.fetchall()
+            
+            cursor.execute("SELECT user_id, action, details, timestamp FROM activity_logs ORDER BY id DESC LIMIT 20")
+            logs = cursor.fetchall()
             conn.close()
             
+            users_rows = "".join([f"<tr><td>{u[0]}</td><td>@{u[1]}</td><td>{u[2]}</td><td><b>{u[3]}</b></td></tr>" for u in users])
+            blacklist_rows = "".join([f"<li>{b[0]}</li>" for b in blacklisted])
+            log_rows = "".join([f"<tr><td>{l[0]}</td><td>{l[1]}</td><td>{l[2]}</td><td>{l[3]}</td></tr>" for l in logs])
+
             html = f"""
             <!DOCTYPE html>
             <html>
-            <head><title>Admin Panel</title><meta charset="utf-8"></head>
-            <body style="font-family: Arial; padding: 20px;">
-                <h1>🛡️ Bot Admin Boshqaruv Paneli</h1>
-                <p>Tekshirilgan havolalar: <b>{stats['checked_count']}</b></p>
-                <p>Kiber-Auditlar: <b>{stats['audit_count']}</b></p>
-                <p>Bloklangan vishing ovozlar: <b>{stats['voice_danger_count']}</b></p>
-                <p>Jami foydalanuvchilar: <b>{len(users)}</b></p>
+            <head>
+                <title>Kiber Bot - Admin Panel</title>
+                <meta charset="utf-8">
+                <style>
+                    body {{ font-family: Arial, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; color: #333; }}
+                    h1, h2 {{ color: #1a73e8; }}
+                    .container {{ max-width: 1000px; margin: auto; }}
+                    .card {{ background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+                    .stats-grid {{ display: flex; gap: 15px; flex-wrap: wrap; }}
+                    .stat-box {{ background: #e8f0fe; padding: 15px; border-radius: 6px; flex: 1; min-width: 180px; text-align: center; }}
+                    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+                    th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; font-size: 14px; }}
+                    th {{ background: #f8f9fa; }}
+                    input[type="text"], textarea {{ width: 100%; padding: 8px; margin-top: 5px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }}
+                    button {{ background: #1a73e8; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }}
+                    button:hover {{ background: #1557b0; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🛡️ Kiber-Xavfsizlik Boshqaruv Paneli</h1>
+                    
+                    <div class="card">
+                        <h2>📊 Asosiy Statistika</h2>
+                        <div class="stats-grid">
+                            <div class="stat-box"><h3>{stats['checked_count']}</h3><p>Tekshirilgan Havolalar</p></div>
+                            <div class="stat-box"><h3>{stats['danger_count']}</h3><p>Bloklangan Phishing</p></div>
+                            <div class="stat-box"><h3>{stats['audit_count']}</h3><p>Kiber-Auditlar</p></div>
+                            <div class="stat-box"><h3>{len(users)}</h3><p>Foydalanuvchilar</p></div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h2>📢 Global Xabar Tarqatish (Broadcast)</h2>
+                        <form method="POST" action="/broadcast">
+                            <label>Barcha foydalanuvchilarga yuborish uchun xabar matni:</label>
+                            <textarea name="message" rows="3" placeholder="E'lon matnini kiriting..."></textarea>
+                            <button type="submit">Xabarni yuborish</button>
+                        </form>
+                    </div>
+
+                    <div class="card">
+                        <h2>🚫 Domenlarni Qora Ro'yxatga Qo'shish</h2>
+                        <form method="POST" action="/add_blacklist">
+                            <label>Domen nomi (masalan: scam-site.xyz):</label>
+                            <input type="text" name="domain" placeholder="domen.uz">
+                            <button type="submit">Qora ro'yxatga qo'shish</button>
+                        </form>
+                        <ul>{blacklist_rows}</ul>
+                    </div>
+
+                    <div class="card">
+                        <h2>⚡ Jonli Faoliyat Jurnali (Logs)</h2>
+                        <table>
+                            <tr><th>User ID</th><th>Amal (Action)</th><th>Tafsilot</th><th>Vaqt</th></tr>
+                            {log_rows}
+                        </table>
+                    </div>
+
+                    <div class="card">
+                        <h2>👥 Foydalanuvchilar Ro'yxati</h2>
+                        <table>
+                            <tr><th>ID</th><th>Username</th><th>Ism</th><th>Karma</th></tr>
+                            {users_rows}
+                        </table>
+                    </div>
+                </div>
             </body>
             </html>
             """
@@ -198,11 +291,62 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
             return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        parsed_path = urlparse(self.path)
+        content_length = int(self.headers.get('Content-Length', 0))
+        post_data = self.rfile.read(content_length).decode('utf-8')
+        params = parse_qs(post_data)
+
+        if parsed_path.path == "/add_blacklist":
+            domain = params.get("domain", [""])[0].strip()
+            if domain:
+                add_global_blacklist(domain)
+                log_activity(ADMIN_ID, "BLACKLIST_ADD", f"Domen qo'shildi: {domain}")
+            self.send_response(303)
+            self.send_header('Location', '/admin')
+            self.end_headers()
+            return
+
+        if parsed_path.path == "/broadcast":
+            broadcast_msg = params.get("message", [""])[0].strip()
+            if broadcast_msg:
+                log_activity(ADMIN_ID, "BROADCAST", f"Xabar yuborildi: {broadcast_msg[:30]}...")
+                # Asinxron xabar tarqatishni fonda ishga tushiramiz
+                threading.Thread(target=run_broadcast, args=(broadcast_msg,), daemon=True).start()
+            self.send_response(303)
+            self.send_header('Location', '/admin')
+            self.end_headers()
+            return
+
         self.send_response(404)
         self.end_headers()
 
     def log_message(self, format, *args):
         return
+
+def run_broadcast(text):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users")
+    users = cursor.fetchall()
+    conn.close()
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    async def send_all():
+        for u in users:
+            try:
+                await bot.send_message(u[0], f"📢 **Admin e'loni:**\n\n{text}", parse_mode="Markdown")
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+
+    loop.run_until_complete(send_all())
 
 def run_http_server():
     port = int(os.environ.get("PORT", 10000))
@@ -232,53 +376,32 @@ def get_webpage_screenshot(url: str) -> bytes:
         pass
     return None
 
-# --- 1. FEATURE: AUTONOMOUS KIBER-DETEKTIV AGENT (/audit) ---
+# --- HANDLERLAR ---
 @dp.message(Command("audit"))
 async def cmd_audit(message: Message):
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.answer("❌ Foydalanish: `/audit <kanal_username yoki havola>`\n\nMasalan: `/audit @shubhali_kanal` yoki `/audit https://example.com`", parse_mode="Markdown")
+        await message.answer("❌ Foydalanish: `/audit <kanal_username yoki havola>`", parse_mode="Markdown")
         return
-    
     target = args[1].strip()
     stats["audit_count"] += 1
-    await message.answer(f"🕵️‍♂️ **Avtonom Kiber-Detektiv Agent** ishga tushdi...\nTarget: `{target}` tahlil qilinmoqda...", parse_mode="Markdown")
+    log_activity(message.from_user.id, "AUDIT", target)
+    await message.answer(f"🕵️️‍♂️ **Avtonom Kiber-Detektiv Agent** tahlilni boshladi: `{target}`", parse_mode="Markdown")
 
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
-            contents=f"""
-            You are an elite Autonomous Cybersecurity & OSINT Intelligence Agent. 
-            Perform a thorough forensic security audit and threat analysis on this target: '{target}'.
-            Provide a professional intelligence report in Uzbek language covering:
-            1. Xavf darajasi (Risk Level: Xavfsiz, Shubhali yoki Yuqori Xavfli).
-            2. Potentsial firibgarlik sxemalari (Scam patterns, fake investment, phishing).
-            3. Texnik tahlil va tavsiyalar (Technical insights and safety advice).
-            Format it cleanly with Markdown.
-            """
+            contents=f"Perform a professional cybersecurity OSINT audit and threat analysis on: '{target}'. Provide report in Uzbek language."
         )
-        report = f"🛡️ **KIBER-DETEKTIV AUDIT HISOBOTI**\n\n{response.text}"
-        await message.answer(report, parse_mode="Markdown")
+        await message.answer(f"🛡️ **KIBER-AUDIT HISOBOTI**\n\n{response.text}", parse_mode="Markdown")
     except Exception:
         await message.answer("❌ Audit jarayonida xatolik yuz berdi.")
 
-# --- 2. FEATURE: ADVANCED VOICE CLONING / VISHING DETECTOR ---
 @dp.message(F.voice)
 async def handle_voice(message: Message):
     user_id = message.from_user.id
     add_user(user_id, message.from_user.username, message.from_user.full_name)
-    lang = get_user_lang(user_id)
-    chat_type = message.chat.type
-
-    voice = message.voice
-    if voice.file_size and voice.file_size > 15 * 1024 * 1024:
-        await message.answer(TEXTS[lang]['file_too_large'])
-        return
-
-    if chat_type == 'private':
-        await message.answer("🎙️ Ovozli xabar akustik va sun'iy intellekt (Voice Cloning / Vishing) orqali tahlil qilinmoqda...")
-
-    file = await bot.get_file(voice.file_id)
+    file = await bot.get_file(message.voice.file_id)
     file_bytes = await bot.download_file(file.file_path)
     audio_data = file_bytes.read()
 
@@ -286,38 +409,21 @@ async def handle_voice(message: Message):
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
             contents=[
-                "Listen to this audio carefully as an expert audio forensics and cybersecurity analyst. "
-                "Detect if this voice message contains signs of Voice Cloning (Deepfake voice), artificial speech synthesis, "
-                "or vishing (social engineering financial scam asking for money or urgent transfers). "
-                "Answer strictly with 'DANGER' if it is synthetic/cloned or a vishing scam, or 'SAFE' if normal.",
+                "Analyze this audio for Voice Cloning or vishing scam. Answer strictly with 'DANGER' or 'SAFE'.",
                 {"mime_type": "audio/ogg", "data": audio_data}
             ]
         )
-        
-        result_text = response.text.upper()
-        if "DANGER" in result_text:
+        if "DANGER" in response.text.upper():
             stats["voice_danger_count"] += 1
-            if chat_type in ['group', 'supergroup']:
-                try:
-                    await message.delete()
-                    new_rep = update_user_rep(user_id, -20)
-                    await message.answer(f"🚨 DIQQAT! [{message.from_user.full_name}](tg://user?id={user_id}) yuborgan ovozli xabarda Vishing / Voice Cloning aniqlandi va xabar o'chirildi! (Reputation: {new_rep})", parse_mode="Markdown")
-                except Exception:
-                    pass
-                return
-            else:
-                await message.answer(TEXTS[lang]['voice_danger'])
-        else:
-            if chat_type == 'private':
-                await message.answer("✅ Ovozli xabar tahlil qilindi. Sun'iy klonlash yoki vishing alomatlari topilmadi.")
+            log_activity(user_id, "VOICE_DANGER", "Vishing / Voice cloning aniqlandi")
+            await message.answer("🚨 DIQQAT! Ovozli xabarda Vishing alomatlari aniqlandi!")
     except Exception:
-        if chat_type == 'private':
-            await message.answer("❌ Ovozli xabarni tahlil qilishda xatolik yuz berdi.")
+        pass
 
-# --- STANDARD COMMANDS & MESSAGES ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
+    log_activity(message.from_user.id, "START", "Botni ishga tushirdi")
     await message.answer(TEXTS['uz']['start'])
 
 @dp.message(Command("stats"))
@@ -334,7 +440,6 @@ async def cmd_stats(message: Message):
         audit=stats['audit_count'],
         screenshot=stats['screenshot_count'],
         voice=stats['voice_danger_count'],
-        video=stats['video_danger_count'],
         users=users_count
     )
     await message.answer(text, parse_mode="Markdown")
@@ -342,7 +447,7 @@ async def cmd_stats(message: Message):
 @dp.message(Command("top"))
 async def cmd_top(message: Message):
     top_users = get_top_users(10)
-    text = "🏆 **Eng hushyor foydalanuvchilar reytingi (Karma):**\n\n"
+    text = "🏆 **Eng hushyor foydalanuvchilar reytingi:**\n\n"
     for idx, (full_name, username, rep) in enumerate(top_users, 1):
         name_display = f"@{username}" if username else full_name
         text += f"{idx}. **{name_display}** — `{rep}` ball\n"
@@ -361,13 +466,6 @@ async def handle_message(message: Message):
     user_id = message.from_user.id
     add_user(user_id, message.from_user.username, message.from_user.full_name)
     
-    current_time = time.time()
-    if user_id in user_last_message_time:
-        if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
-            await message.answer(TEXTS['uz']['spam'])
-            return
-    user_last_message_time[user_id] = current_time
-
     url = extract_url(message.text)
     if url:
         stats["checked_count"] += 1
@@ -376,13 +474,17 @@ async def handle_message(message: Message):
         if domain.startswith('www.'):
             domain = domain[4:]
 
+        if is_globally_blacklisted(domain):
+            stats["danger_count"] += 1
+            log_activity(user_id, "BLACKLIST_HIT", domain)
+            await message.answer("🚨 DIQQAT! Ushbu manzil qora ro'yxatga kiritilgan!")
+            return
+
         if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
             await message.answer(f"🔗 **Link:**\n{TEXTS['uz']['safe_link']}")
             return
 
-        await message.answer("📸 Sayt skrinshoti olinib, AI phishing tekshiruvi bajarilmoqda...")
         screenshot_bytes = get_webpage_screenshot(url)
-        
         if screenshot_bytes:
             stats["screenshot_count"] += 1
             image = Image.open(BytesIO(screenshot_bytes))
@@ -390,26 +492,26 @@ async def handle_message(message: Message):
                 response = ai_client.models.generate_content(
                     model='gemini-2.5-flash',
                     contents=[
-                        "Analyze this webpage screenshot carefully. Is this a phishing website, fake login page imitating banks, or a fraudulent scam scheme? "
-                        "Start response strictly with '🚨 PHISHING/SCAM' if dangerous, or '✅ SAFE' if legitimate.",
+                        "Analyze this webpage screenshot. Is this phishing or a scam? Start response with '🚨 PHISHING/SCAM' or '✅ SAFE'.",
                         image
                     ]
                 )
                 if "PHISHING" in response.text.upper() or "SCAM" in response.text.upper():
                     stats["danger_count"] += 1
+                    log_activity(user_id, "PHISHING_DETECTED", domain)
                     await message.answer_photo(
                         photo=BufferedInputFile(screenshot_bytes, filename="screenshot.jpg"),
-                        caption=f"🚨 **DIQQAT! SOXTA / PHISHING SAYT ANIQLANDI!**\n\n{response.text}",
+                        caption=f"🚨 **DIQQAT! PHISHING SAYT ANIQLANDI!**\n\n{response.text}",
                         parse_mode="Markdown"
                     )
                 else:
-                    await message.answer(f"✅ Sayt skrinshoti tekshirildi. Xavfli alomatlar topilmadi.\n\n{response.text}")
+                    await message.answer(f"✅ Sayt skrinshoti tekshirildi.\n\n{response.text}")
             except Exception:
-                await message.answer("❌ Skrinshotni tahlil qilishda xatolik yuz berdi.")
+                pass
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("Avtonom Detektiv va Voice Cloning modullari qo'shilgan bot ishga tushdi...")
+    print("Kuchaytirilgan admin panel va bot ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await set_default_commands(bot)
     await dp.start_polling(bot)
