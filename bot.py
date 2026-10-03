@@ -164,6 +164,7 @@ user_last_time = {}
 SPAM_LIMIT = 1.5
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
+ADMIN_PANEL_PATH = f"/admin_{TOKEN}"  # Maxfiy admin panel yo'li
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
 WEBHOOK_URL = f"{RENDER_URL}{WEBHOOK_PATH}"
 
@@ -174,10 +175,11 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Bot and Panel are running!")
+            self.wfile.write(b"Bot is running securely!")
             return
             
-        if parsed_path.path == "/admin":
+        # Faqat maxfiy admin havolasi orqali ochiladi
+        if parsed_path.path == ADMIN_PANEL_PATH:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
             cursor.execute("SELECT user_id, username, full_name, language FROM users")
@@ -192,9 +194,9 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             html = f"""
             <!DOCTYPE html>
             <html>
-            <head><meta charset="utf-8"><title>Admin Panel</title></head>
+            <head><meta charset="utf-8"><title>Secure Admin Panel</title></head>
             <body style="font-family: Arial; padding: 20px; background: #f0f2f5;">
-                <h1>🛡️ Kiber-Xavfsizlik Panel</h1>
+                <h1>🛡️ Maxfiy Kiber-Xavfsizlik Panel</h1>
                 <div style="background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
                     <h3>📊 Statistika</h3>
                     <p>Tekshirilgan: {stats['checked_count']} | Bloklangan: {stats['danger_count']} | Foydalanuvchilar: {len(users)}</p>
@@ -218,6 +220,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(html.encode("utf-8"))
             return
+            
         self.send_response(404)
         self.end_headers()
 
@@ -331,7 +334,7 @@ async def cmd_audit(message: Message):
     target = args[1].strip()
     stats["audit_count"] += 1
     log_activity(user_id, "AUDIT", target)
-    await message.answer(f"🕵‍♂️ Tahlil boshlandi: `{target}`", parse_mode="Markdown")
+    await message.answer(f"🕵‍♂️️ Tahlil boshlandi: `{target}`", parse_mode="Markdown")
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
@@ -344,8 +347,11 @@ async def cmd_audit(message: Message):
 @dp.message(Command("web"))
 async def cmd_web(message: Message):
     if message.from_user.id != ADMIN_ID:
+        # Oddiy foydalanuvchilar uchun bu buyruq go'yo yo'qdek javob beriladi
+        await message.answer("❌ Noma'lum buyruq. `/help` orqali yordam olishingiz mumkin.")
         return
-    await message.answer(f"🌐 **Veb-panel:** [Ochish]({RENDER_URL}/admin)", parse_mode="Markdown")
+    # Faqat adminga maxfiy havola yuboriladi
+    await message.answer(f"🌐 **Maxfiy Veb-panel:** [Ochish]({RENDER_URL}{ADMIN_PANEL_PATH})", parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("req_black:"))
 async def callback_request_blacklist(callback: CallbackQuery):
