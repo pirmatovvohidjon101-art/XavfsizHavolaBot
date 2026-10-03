@@ -104,14 +104,6 @@ def update_user_rep(user_id, change):
     conn.close()
     return row[0] if row else 100
 
-def get_all_users():
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM users")
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
-
 def get_top_users(limit=10):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -153,26 +145,25 @@ def is_blacklisted(chat_id, domain):
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va AI yordamchi botiman. Guruhlarda shubhali havolalar, zararli fayllar (.apk), soxta cheklar va QR-kodlarni nazorat qilaman.",
-        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
+        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va AI yordamchi botiman. Guruhlarda shubhali havolalar, zararli fayllar, soxta cheklar, ovozli xabarlar va QR-kodlarni nazorat qilaman.",
+        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n🎙️ Xavfli ovozlar: {voice}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, to'lov cheki yoki QR-kod yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli havolasi\n- `/whitelist` / `/blacklist` — Ro'yxatni boshqarish",
+        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, ovozli xabar, to'lov cheki yoki QR-kod yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli havolasi\n- `/whitelist` / `/blacklist` — Ro'yxatni boshqarish",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
-        'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i bo'lishi mumkin.",
+        'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i yoki zararli sayt aniqlandi.",
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) javobi:",
         'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/havola yuborgani uchun xabar o'chirildi va karma ochkosi kamaytirildi! (Reputation: {rep})",
-        'file_danger': "🚨 DIQQAT! Guruhda zararli yoki shubhali fayl (.apk / .exe) aniqlandi va o'chirildi!",
-        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik alomatlari aniqlandi!"
+        'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik (pul so'rash/aldash) alomatlari aniqlandi va xabar o'chirildi!"
     },
     'ru': {
         'start': "👋 Здравствуйте!\n\nЯ бот безопасности и ИИ-помощник.",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
-        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, текст, чеки, фото, файлы.\n- `/top` — Рейтинг",
+        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, текст, чеки, фото, файлы, голосовые.\n- `/top` — Рейтинг",
         'lang_prompt': "🌐 Пожалуйста, выберите язык:",
         'spam': "⚠️ Слишком частые запросы!",
         'safe_link': "✅ Это официальный ресурс.",
@@ -181,14 +172,13 @@ TEXTS = {
         'scam_word': "🛑 Обнаружены признаки мошенничества!",
         'ai_header': "🤖 Ответ ИИ:",
         'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение удалено за нарушение безопасности!",
-        'file_danger': "🚨 ВНИМАНИЕ! В группе обнаружен и удален подозрительный файл!",
         'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!"
     },
     'en': {
         'start': "👋 Hello!\n\nI am a security & AI assistant bot protecting chats.",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ️ **Help:**\n- Check links, text, payment receipts, files, or chat with AI.\n- `/top` — Leaderboard",
+        'help': "ℹ️️ **Help:**\n- Check links, text, payment receipts, voice, files, or chat with AI.\n- `/top` — Leaderboard",
         'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ Too fast requests!",
         'safe_link': "✅ Official resource.",
@@ -197,13 +187,11 @@ TEXTS = {
         'scam_word': "🛑 Scam patterns detected!",
         'ai_header': "🤖 AI Response:",
         'group_danger_alert': "🚨 ATTENTION! Message deleted due to security violation!",
-        'file_danger': "🚨 ATTENTION! Suspicious file detected and deleted!",
         'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!"
     }
 }
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
-DANGEROUS_EXTENSIONS = ['.apk', '.exe', '.scr', '.bat', '.cmd', '.pif', '.msi']
 
 OFFICIAL_DOMAINS = {
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
@@ -294,6 +282,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
                     <h3>📊 Statistika</h3>
                     <p>Tekshirilgan havolalar: <b>{stats['checked_count']}</b></p>
                     <p>Bloklangan xavfli havolalar: <b>{stats['danger_count']}</b></p>
+                    <p>Xavfli ovozli xabarlar: <b>{stats['voice_danger_count']}</b></p>
                     <p>Jami foydalanuvchilar: <b>{len(users)}</b></p>
                 </div>
                 <div class="card">
@@ -342,6 +331,18 @@ def extract_url(text: str) -> str:
     match = url_pattern.search(text)
     return match.group(0) if match else None
 
+# --- 1. URLHAUS (ABUSE.CH) TEKSHIRUVI ---
+def check_urlhaus(url: str) -> bool:
+    try:
+        full_url = url if url.startswith(('http://', 'https://')) else 'https://' + url
+        response = requests.post('https://urlhaus-api.abuse.ch/v1/url/', data={'url': full_url}, timeout=4)
+        res = response.json()
+        if res.get('query_status') == 'ok':
+            return True  # URLhaus bazasida zararli deb topildi
+    except Exception:
+        pass
+    return False
+
 def analyze_link(url: str, chat_id: int) -> str:
     global stats
     stats["checked_count"] += 1
@@ -370,6 +371,11 @@ def analyze_link(url: str, chat_id: int) -> str:
         
     if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
         return "SAFE"
+
+    # URLhaus bazasidan tekshiramiz (1-band)
+    if check_urlhaus(full_url):
+        stats["danger_count"] += 1
+        return "DANGER"
         
     for tld in SUSPICIOUS_TLDS:
         if domain.endswith(tld):
@@ -481,13 +487,65 @@ async def report_scam_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"🚨 `{domain}` qora ro'yxatga qo'shildi! Rahmat (+5 karma).", parse_mode="Markdown")
     await callback.answer()
 
+# --- 2. OVOZLI XABARLARNI (VOICE) GEMINI ORQALI TEKSHIRISH ---
+@dp.message(F.voice)
+async def handle_voice(message: Message):
+    user_id = message.from_user.id
+    add_user(user_id, message.from_user.username, message.from_user.full_name)
+    lang = get_user_lang(user_id)
+    chat_type = message.chat.type
+
+    voice = message.voice
+    file = await bot.get_file(voice.file_id)
+    file_bytes = await bot.download_file(file.file_path)
+    
+    audio_data = file_bytes.read()
+
+    try:
+        # Gemini ga ovozli faylni to'g'ridan-to'g'ri yuborib tahlil qildiramiz
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=[
+                "Listen to this audio carefully. Is this voice message related to financial scam, "
+                "asking for money fraudulently, phishing, or social engineering threats? "
+                "Answer strictly with 'DANGER' if it contains scam/fraudulent intent, or 'SAFE' if it is normal conversation.",
+                {"mime_type": "audio/ogg", "data": audio_data}
+            ]
+        )
+        
+        result_text = response.text.upper()
+        
+        if "DANGER" in result_text:
+            stats["voice_danger_count"] += 1
+            if chat_type in ['group', 'supergroup']:
+                try:
+                    await message.delete()
+                    new_rep = update_user_rep(user_id, -20)
+                    name = message.from_user.full_name
+                    alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id, rep=new_rep)
+                    await message.answer(alert_text, parse_mode="Markdown")
+                    if new_rep <= 0:
+                        await bot.ban_chat_member(message.chat.id, user_id)
+                except Exception:
+                    pass
+                return
+            else:
+                await message.answer(TEXTS[lang]['voice_danger'])
+        else:
+            if chat_type == 'private':
+                await message.answer("✅ Ovozli xabar tinglandi. Xavfli hech narsa topilmadi.")
+                
+    except Exception as e:
+        logging.error(f"Voice analysis error: {e}")
+        if chat_type == 'private':
+            await message.answer("❌ Ovozli xabarni tahlil qilishda xatolik yuz berdi.")
+
 @dp.message(F.photo)
 async def handle_photo(message: Message):
     photo = message.photo[-1]
     file = await bot.get_file(photo.file_id)
     file_bytes = await bot.download_file(file.file_path)
     
-    # OpenCV orqali QR-kodni qidirish va o'qish
     np_arr = np.frombuffer(file_bytes.read(), np.uint8)
     cv_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
     qr_detector = cv2.QRCodeDetector()
@@ -513,12 +571,7 @@ async def handle_photo(message: Message):
         )
         
         analysis_result = f"🤖 **Tahlil Natijasi:**\n\n{response.text}{qr_info}"
-        
-        keyboard = None
-        if "haqiqiy chek" in response.text.lower():
-            analysis_result += "\n\n✅ **To'lov muvaffaqiyatli tasdiqlandi!**"
-
-        await message.answer(analysis_result, parse_mode="Markdown", reply_markup=keyboard)
+        await message.answer(analysis_result, parse_mode="Markdown")
     except Exception:
         await message.answer("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
 
