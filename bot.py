@@ -10,7 +10,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from google import genai
 from PIL import Image
 
@@ -83,6 +83,8 @@ TEXTS = {
         'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi **Sun'iy Intellekt (Gemini AI)** bilan jihozlangan xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring!",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
+        'help': "ℹ️ **Qo'llanma:**\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — Gemini AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman.",
+        'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu **rasmiy va ishonchli** manzil.",
         'danger_link': "🚨 **DIQQAT! XAVFLI HAVOLA!** Firibgarlar tuzog'i bo'lishi mumkin.",
@@ -95,6 +97,8 @@ TEXTS = {
         'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку, текст или изображение/QR-код!",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
+        'help': "ℹ️ **Справка:**\n\n- Отправьте мне любую ссылку — я проверю ее безопасность.\n- Отправьте текст — я проверю его на признаки мошенничества через Gemini AI.\n- Отправьте фото или QR-код — я проанализирую их.",
+        'lang_prompt': "🌐 Пожалуйста, выберите язык:",
         'spam': "⚠️ Слишком частые запросы! Пожалуйста, подождите.",
         'safe_link': "✅ Это **официальный и надежный** ресурс.",
         'danger_link': "🚨 **ВНИМАНИЕ! ОПАСНАЯ ССЫЛКА!** Возможно это мошенники.",
@@ -107,10 +111,12 @@ TEXTS = {
         'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link, text, or image/QR-code!",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
+        'help': "ℹ️ **Help:**\n\n- Send me any link — I will check its security.\n- Send text — I will scan it for scam patterns using Gemini AI.\n- Send an image or QR-code — I will analyze it.",
+        'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ You are sending messages too fast! Please wait.",
         'safe_link': "✅ This is an **official and trusted** resource.",
         'danger_link': "🚨 **ATTENTION! DANGEROUS LINK!** This might be a scam.",
-        'warning_link': "⚠ **Unknown link.** Be careful when entering your personal data.",
+        'warning_link': "⚠️️ **Unknown link.** Be careful when entering your personal data.",
         'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
         'ai_header': "🤖 **AI Analysis:**",
         'clean': "✅ No dangerous elements found, but stay vigilant."
@@ -141,6 +147,16 @@ SCAM_WORDS = ['yutib oldingiz', 'bonus', 'sovg', 'pul ishlang', 'aktsiya', 'kesh
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# --- MENYU TUGMALARINI SOZLASH (MENU BUTTON) ---
+async def set_default_commands(bot: Bot):
+    commands = [
+        BotCommand(command="start", description="🚀 Botni ishga tushirish"),
+        BotCommand(command="stats", description="📊 Bot statistikasi"),
+        BotCommand(command="language", description="🌐 Tilni o'zgartirish"),
+        BotCommand(command="help", description="ℹ️ Qo'llanma va yordam")
+    ]
+    await bot.set_my_commands(commands)
 
 # Render port talab qilgani uchun oddiy HTTP server
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -216,6 +232,23 @@ async def cmd_start(message: Message):
         ]
     ])
     await message.answer(TEXTS[lang]['start'], reply_markup=keyboard)
+
+@dp.message(Command("language"))
+async def cmd_language(message: Message):
+    lang = get_user_lang(message.from_user.id)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🇺🇿 O'zbekcha", callback_data="lang_uz"),
+            InlineKeyboardButton(text="🇷🇺 Русский", callback_data="lang_ru"),
+            InlineKeyboardButton(text="🇬🇧 English", callback_data="lang_en")
+        ]
+    ])
+    await message.answer(TEXTS[lang]['lang_prompt'], reply_markup=keyboard)
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(TEXTS[lang]['help'])
 
 @dp.callback_query(F.data.startswith("lang_"))
 async def change_language(callback: CallbackQuery):
@@ -309,6 +342,10 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # Menyu tugmalarini o'rnatish
+    await set_default_commands(bot)
+    
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
