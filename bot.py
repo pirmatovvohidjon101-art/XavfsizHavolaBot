@@ -33,7 +33,14 @@ ADMIN_PANEL_SECRET = os.getenv("ADMIN_PANEL_SECRET", "kiber_secret_2026")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-2.0-flash"
+
+# Hozirgi ishlayotgan modellar (fallback bilan)
+MODELS = [
+    "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3.6-flash",
+]
 
 stats = {
     "checked_count": 0,
@@ -190,7 +197,6 @@ async def set_commands():
     ]
     await bot.set_my_commands(default_cmds)
 
-    # Faqat admin uchun
     admin_cmds = default_cmds + [
         BotCommand(command="panel", description="🔐 Admin Panel"),
     ]
@@ -242,18 +248,39 @@ async def notify_admin(text: str):
         pass
 
 async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
-    try:
-        response = ai_client.models.generate_content(
-            model=MODEL_NAME,
-            contents=[
-                prompt,
-                types.Part.from_bytes(data=data, mime_type=mime)
-            ]
-        )
-        return response.text or ""
-    except Exception as e:
-        logging.error(f"Gemini error: {e}")
-        return f"ERROR: {str(e)[:150]}"
+    """Bir nechta modelni ketma-ket sinab ko‘radi"""
+    last_error = ""
+    for model in MODELS:
+        try:
+            response = ai_client.models.generate_content(
+                model=model,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=data, mime_type=mime)
+                ]
+            )
+            logging.info(f"Muvaffaqiyatli model: {model}")
+            return response.text or ""
+        except Exception as e:
+            last_error = str(e)
+            logging.warning(f"Model {model} ishlamadi: {e}")
+            continue
+    return f"ERROR: Barcha modellar ishlamadi. Oxirgi xato: {last_error[:120]}"
+
+async def text_with_gemini(prompt: str) -> str:
+    """Faqat matn uchun (audit)"""
+    last_error = ""
+    for model in MODELS:
+        try:
+            response = ai_client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+            return response.text or ""
+        except Exception as e:
+            last_error = str(e)
+            continue
+    return f"ERROR: {last_error[:120]}"
 
 # ==================== HANDLERS ====================
 @dp.message(Command("start"))
@@ -284,14 +311,14 @@ async def cmd_audit(message: Message):
     stats["audit_count"] += 1
     log_activity(message.from_user.id, "AUDIT", target)
     await message.answer(f"🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`", parse_mode="Markdown")
-    try:
-        resp = ai_client.models.generate_content(
-            model=MODEL_NAME,
-            contents=f"Professional cybersecurity OSINT audit of '{target}'. Full detailed report in Uzbek language."
-        )
-        await message.answer(f"🛡️ **AUDIT HISOBOTI**\n\n{resp.text}", parse_mode="Markdown")
-    except Exception as e:
-        await message.answer(f"❌ Audit xatosi: {str(e)[:100]}")
+    
+    result = await text_with_gemini(
+        f"Professional cybersecurity OSINT audit of '{target}'. Full detailed report in Uzbek language."
+    )
+    if result.startswith("ERROR"):
+        await message.answer(f"❌ Audit xatosi: {result}")
+    else:
+        await message.answer(f"🛡️ **AUDIT HISOBOTI**\n\n{result}", parse_mode="Markdown")
 
 @dp.message(Command("panel"))
 async def cmd_panel(message: Message, state: FSMContext):
@@ -689,7 +716,7 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot muvaffaqiyatli ishga tushdi")
+    print("✅ Bot muvaffaqiyatli ishga tushdi (model fallback bilan)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
