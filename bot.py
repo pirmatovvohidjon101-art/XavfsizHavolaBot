@@ -34,7 +34,6 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Hozirgi eng yaxshi ishlayotgan modellar
 MODELS = [
     "gemini-2.5-flash-lite",
     "gemini-3.1-flash-lite",
@@ -208,31 +207,24 @@ def extract_url(text: str):
     if not text:
         return None
 
-    # 1. Oddiy so‘zlarni tekshirish
     for word in text.split():
         clean = word.strip(".,;:!?()[]{}\"'")
 
-        # To‘liq havola
         if clean.startswith(("http://", "https://", "www.")):
             return clean
 
-        # Telegram
         if "t.me/" in clean.lower() or "telegram.me/" in clean.lower():
             return clean
         if clean.startswith("@") and len(clean) > 1:
             return f"t.me/{clean[1:]}"
 
-        # Oddiy domen (kun.uz, google.com, example.xyz va h.k.)
-        if "." in clean and " " not in clean and len(clean) > 3:
-            # Oddiy tekshiruv: kamida bitta nuqta va harf/raqam
+        if "." in clean and len(clean) > 3 and " " not in clean:
             parts = clean.split(".")
-            if len(parts) >= 2 and all(part.isalnum() or "-" in part for part in parts):
-                # Ma’lum kengaytmalar
-                if parts[-1].lower() in {
-                    "uz", "com", "net", "org", "ru", "info", "xyz", "site",
-                    "online", "me", "io", "co", "tv", "cc", "app", "dev"
-                }:
-                    return clean
+            if len(parts) >= 2 and parts[-1].lower() in {
+                "uz", "com", "net", "org", "ru", "info", "xyz", "site",
+                "online", "me", "io", "co", "tv", "cc", "app", "dev"
+            }:
+                return clean
 
     return None
 
@@ -270,48 +262,44 @@ async def notify_admin(text: str):
         pass
 
 async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
-    """Bir nechta modelni sinaydi + 503 uchun retry"""
     last_error = ""
     for model in MODELS:
-        for attempt in range(3):
-            try:
-                response = ai_client.models.generate_content(
-                    model=model,
-                    contents=[
-                        prompt,
-                        types.Part.from_bytes(data=data, mime_type=mime)
-                    ]
-                )
-                logging.info(f"Muvaffaqiyatli model: {model}")
-                return response.text or ""
-            except Exception as e:
-                last_error = str(e)
-                logging.warning(f"{model} xato (urinish {attempt+1}): {e}")
-                if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
-                    await asyncio.sleep(2 + attempt * 2)
-                    continue
-                break
-    return f"ERROR: Barcha modellar band yoki ishlamayapti. Oxirgi xato: {last_error[:150]}"
+        try:
+            response = ai_client.models.generate_content(
+                model=model,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(data=data, mime_type=mime)
+                ]
+            )
+            logging.info(f"Muvaffaqiyatli model: {model}")
+            return response.text or ""
+        except Exception as e:
+            last_error = str(e)
+            logging.warning(f"{model} xato: {e}")
+            if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
+                await asyncio.sleep(1.5)
+                continue
+            continue
+    return f"ERROR: Barcha modellar band. Oxirgi xato: {last_error[:120]}"
 
 async def text_with_gemini(prompt: str) -> str:
-    """Faqat matn uchun (audit) + retry"""
     last_error = ""
     for model in MODELS:
-        for attempt in range(3):
-            try:
-                response = ai_client.models.generate_content(
-                    model=model,
-                    contents=prompt
-                )
-                return response.text or ""
-            except Exception as e:
-                last_error = str(e)
-                logging.warning(f"{model} xato (urinish {attempt+1}): {e}")
-                if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
-                    await asyncio.sleep(2 + attempt * 2)
-                    continue
-                break
-    return f"ERROR: {last_error[:150]}"
+        try:
+            response = ai_client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+            return response.text or "Javob bo‘sh keldi."
+        except Exception as e:
+            last_error = str(e)
+            logging.warning(f"Model {model} xato: {e}")
+            if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
+                await asyncio.sleep(1.5)
+                continue
+            continue
+    return f"ERROR: Hozir barcha AI modellar band. Keyinroq qayta urinib ko‘ring.\nOxirgi xato: {last_error[:100]}"
 
 # ==================== HANDLERS ====================
 @dp.message(Command("start"))
@@ -338,18 +326,35 @@ async def cmd_audit(message: Message):
     if len(args) < 2:
         await message.answer("❌ `/audit <havola yoki kanal>`")
         return
+
     target = args[1].strip()
     stats["audit_count"] += 1
     log_activity(message.from_user.id, "AUDIT", target)
-    await message.answer(f"🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`", parse_mode="Markdown")
-    
-    result = await text_with_gemini(
-        f"Professional cybersecurity OSINT audit of '{target}'. Full detailed report in Uzbek language."
+
+    wait_msg = await message.answer(
+        f"🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`\n\nKuting, tahlil qilinmoqda...",
+        parse_mode="Markdown"
     )
+
+    result = await text_with_gemini(
+        f"Professional cybersecurity OSINT audit of '{target}'. "
+        f"Write a clear, structured report in Uzbek language. "
+        f"Include: possible risks, legitimacy, recommendations."
+    )
+
+    try:
+        await wait_msg.delete()
+    except:
+        pass
+
     if result.startswith("ERROR"):
-        await message.answer(f"❌ Audit xatosi: {result}")
+        await message.answer(f"❌ {result}")
     else:
-        await message.answer(f"🛡️ **AUDIT HISOBOTI**\n\n{result}", parse_mode="Markdown")
+        if len(result) > 4000:
+            for i in range(0, len(result), 4000):
+                await message.answer(result[i:i+4000])
+        else:
+            await message.answer(f"🛡️ **AUDIT HISOBOTI**\n\n{result}", parse_mode="Markdown")
 
 @dp.message(Command("panel"))
 async def cmd_panel(message: Message, state: FSMContext):
@@ -387,7 +392,6 @@ async def handle_photo(message: Message):
     file = await bot.get_file(photo.file_id)
     data = (await bot.download_file(file.file_path)).read()
 
-    # 1. Mahalliy QR
     qr_data = detect_qr(data)
     if qr_data:
         lower = qr_data.lower()
@@ -402,7 +406,6 @@ async def handle_photo(message: Message):
             msg += "✅ Oddiy QR ko‘rinadi."
         await message.reply(msg, parse_mode="Markdown")
 
-    # 2. Gemini tahlili
     prompt = (
         "Bu rasmni kiber-xavfsizlik nuqtai nazaridan tahlil qil. "
         "QR-kod, soxta hujjat, firibgarlik, phishing belgilari bormi? "
@@ -524,10 +527,9 @@ async def handle_text(message: Message):
 
     stats["checked_count"] += 1
 
-    # === TELEGRAM PROFIL / KANAL ===
+    # Telegram profil / kanal
     if url.startswith("t.me/") or "t.me/" in url or "telegram.me/" in url:
         clean_target = url.replace("https://", "").replace("http://", "").replace("t.me/", "").replace("telegram.me/", "").strip("/")
-        
         await message.reply(
             f"🔗 **Telegram profil/kanal:** `{clean_target}`\n\n"
             f"Telegram sahifalaridan skrinshot olinmaydi.\n"
@@ -537,7 +539,6 @@ async def handle_text(message: Message):
         )
         return
 
-    # Oddiy saytlar uchun
     full_url = url if url.startswith(("http://", "https://")) else "https://" + url
     parsed = urlparse(full_url)
     domain = parsed.netloc.lower().removeprefix("www.")
@@ -554,7 +555,6 @@ async def handle_text(message: Message):
         await message.reply("✅ Rasmiy va ishonchli manzil.")
         return
 
-    # Skrinshot olish
     shot = get_webpage_screenshot(full_url)
     if shot:
         stats["screenshot_count"] += 1
@@ -764,7 +764,7 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot muvaffaqiyatli ishga tushdi (503 retry + fallback bilan)")
+    print("✅ Bot muvaffaqiyatli ishga tushdi")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
