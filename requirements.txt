@@ -1,3 +1,6 @@
 aiogram
 google-genai
-Pillow
+pillow
+opencv-python-headless
+numpy
+requests
