@@ -80,10 +80,10 @@ def get_all_users():
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring!",
+        'start': "👋 Assalomu alaykum!\n\nMen O‘zbekistondagi rasmiy saytlar, banklar, OAV va shubhali havolalarni tekshiruvchi xavfsizlik botiman.\n\n🔍 Menga havola, matn yoki rasm/QR-kod yuboring! Guruhlarda ham ishlayman.",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman. \n 👨‍💻Admin: @thePirmatov",
+        'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman.\n- **Guruhlarda:** Shubhali havolalar va firibgarlik xabarlarini avtomatik o'chirib turaman!\n 👨‍💻Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
@@ -91,13 +91,14 @@ TEXTS = {
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) xulosasi:",
-        'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling."
+        'clean': "✅ Matnda xavfli belgilar topilmadi, lekin baribir hushyor bo'ling.",
+        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) tomonidan yuborilgan xabarda xavfli havola yoki firibgarlik alomatlari aniqlandi va xabar o'chirildi!"
     },
     'ru': {
-        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений.\n\n🔍 Отправьте мне ссылку, текст или изображение/QR-код!",
+        'start': "👋 Здравствуйте!\n\nЯ бот кибербезопасности с **ИИ (Gemini AI)** для проверки официальных сайтов Узбекистана, ссылок и подозрительных сообщений. Работаю и в группах!",
         'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
-        'help': "ℹ️ **Справка:**\n\n- Отправьте мне любую ссылку — я проверю ее безопасность.\n- Отправьте текст — я проверю его на признаки мошенничества через Gemini AI.\n- Отправьте фото или QR-код — я проанализирую их.",
+        'help': "ℹ️ **Справка:**\n\n- Отправьте мне любую ссылку или текст.\n- **В группах:** Автоматически удаляю подозрительные ссылки и спам!",
         'lang_prompt': "🌐 Пожалуйста, выберите язык:",
         'spam': "⚠️ Слишком частые запросы! Пожалуйста, подождите.",
         'safe_link': "✅ Это **официальный и надежный** ресурс.",
@@ -105,13 +106,14 @@ TEXTS = {
         'warning_link': "⚠️ **Неизвестная ссылка.** Будьте осторожны при вводе данных.",
         'scam_word': "🛑 **ВНИМАНИЕ! Обнаружены признаки мошенничества в тексте!**",
         'ai_header': "🤖 **Заключение ИИ:**",
-        'clean': "✅ Опасных признаков не обнаружено, но будьте бдительны."
+        'clean': "✅ Опасных признаков не обнаружено, но будьте бдительны.",
+        'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение от [{user}](tg://user?id={uid}) содержало опасную ссылку или мошенничество и было удалено!"
     },
     'en': {
-        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages in Uzbekistan.\n\n🔍 Send me a link, text, or image/QR-code!",
+        'start': "👋 Hello!\n\nI am a cybersecurity bot powered by **AI (Gemini AI)** to check official websites, links, and suspicious messages. I also work in groups!",
         'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ️ **Help:**\n\n- Send me any link — I will check its security.\n- Send text — I will scan it for scam patterns using Gemini AI.\n- Send an image or QR-code — I will analyze it.",
+        'help': "ℹ️ **Help:**\n\n- Send me any link or text.\n- **In groups:** Automatically deletes suspicious links and scam messages!",
         'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ You are sending messages too fast! Please wait.",
         'safe_link': "✅ This is an **official and trusted** resource.",
@@ -119,74 +121,50 @@ TEXTS = {
         'warning_link': "⚠ **Unknown link.** Be careful when entering your personal data.",
         'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
         'ai_header': "🤖 **AI Analysis:**",
-        'clean': "✅ No dangerous elements found, but stay vigilant."
+        'clean': "✅ No dangerous elements found, but stay vigilant.",
+        'group_danger_alert': "🚨 ATTENTION! Message from [{user}](tg://user?id={uid}) contained a dangerous link/scam and was deleted!"
     }
 }
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
 
-# Barcha turdagi rasmiy va ishonchli domenlar bazasi
 OFFICIAL_DOMAINS = {
-    # Barcha davlat portal va vazirliklar (.gov.uz bilan tugaydigan barcha rasmiy saytlar)
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
     'soliq.uz', 'my.soliq.uz', 'uzgidromet.uz', 'mehnat.uz', 'my.mehnat.uz',
     'iiv.uz', 'mfa.uz', 'minjust.uz', 'uzedu.uz', 'ssv.uz', 'tiiame.uz',
     'uzavtoyul.uz', 'ex.kadastr.uz', 'miib.uz', 'uzbektourism.uz', 'sport.uz',
     'mineconomy.uz', 'minenergy.uz', 'uzimassiv.uz', 'e-auksion.uz', 'jud.uz',
-    
-    # Barcha Respublika OAV (gazeta, jurnal, TV, radio va internet nashrlar)
-    'kun.uz', 'gazeta.uz', 'daryo.uz', 'uzreport.news', 'upl.uz', 'sof.uz', 
-    'qalampir.uz', 'zamin.uz', 'xabar.uz', 'yuz.uz', 'uza.uz', 'terabayt.uz',
-    'sputniknews.uz', 'aniq.uz', 'qalampir.uz', 'azon.uz', 'azon.uz', 'uzdaily.uz',
-    'xs.uz', 'pv.uz', 'iiv.uz', 'turon24.uz', 'parliament.uz', 'bbs.uz',
-    'mtrk.uz', 'uzbekiston24.uz', 'Yoshlar.tv', 'forbes.uz', 'spot.uz',
-    
-    # Barcha tijorat banklari va to'lov tashkilotlari
+    'muslim.uz', 'fatvo.uz', 'quran.uz', 'ziyouz.uz', 'buxari.uz', 'hilolnashr.uz',
+    'dtm.uz', 'edu.uz', 'urdu.uz', 'nuu.uz', 'tsul.uz', 'tami.uz', 'tuit.uz',
     'nbu.uz', 'agrobank.uz', 'kapitalbank.uz', 'ipotekabank.uz', 'davrbank.uz',
     'orientfinanzbank.uz', 'hamkorbank.uz', 'asakabank.uz', 'anorbank.uz',
     'tbcbank.uz', 'octobank.uz', 'infinbank.uz', 'ipakyulibank.uz', 'aloqabank.uz',
     'trastbank.uz', 'sqb.uz', 'mkbank.uz', 'ziraatbank.uz', 'poytaxtbank.uz',
-    'asiaunion.uz', 'universalbank.uz', 'octobank.uz', 'tengebank.uz',
+    'asiaunion.uz', 'universalbank.uz', 'tengebank.uz',
     'uzcard.uz', 'humocard.uz', 'click.uz', 'payme.uz', 'uzum.uz', 'uzummarket.uz', 
-    'uzumbank.uz', 'paynet.uz', 'Humans.uz', 'octo.uz', 'Apelsin.uz',
-    
-    # Diniy idoralar va ta'lim muassasalari
-    'muslim.uz', 'fatvo.uz', 'quran.uz', 'ziyouz.uz', 'buxari.uz', 'hilolnashr.uz',
-    'dtm.uz', 'edu.uz', 'urdu.uz', 'nuu.uz', 'tsul.uz', 'tami.uz', 'tuit.uz',
-    
-    # Yirik savdo, xizmat ko'rsatish va marketpleyslar
+    'uzumbank.uz', 'paynet.uz', 'Humans.uz', 'octo.uz',
+    'kun.uz', 'gazeta.uz', 'daryo.uz', 'uzreport.news', 'upl.uz', 'sof.uz', 
+    'qalampir.uz', 'zamin.uz', 'xabar.uz', 'yuz.uz', 'uza.uz', 'terabayt.uz',
+    'sputniknews.uz', 'aniq.uz', 'azon.uz', 'uzdaily.uz', 'xs.uz', 'pv.uz',
+    'mtrk.uz', 'uzbekiston24.uz', 'forbes.uz', 'spot.uz',
     'texnomart.uz', 'asaxiy.uz', 'olcha.uz', 'express24.uz', 'zoodmall.uz',
-    'uzum.market', 'mediapark.uz', 'goodzone.uz', 'uzairways.com', 'railway.uz',
-    
-    # Aloqa operatorlari va internet provayderlar
+    'mediapark.uz', 'goodzone.uz', 'uzairways.com', 'railway.uz',
     'beeline.uz', 'ucell.uz', 'mobi.uz', 'uztelecom.uz', 'uzmobile.uz', 
     'ums.uz', 'perfectum.uz', 'sharq.uz', 'sarkor.uz', 'uznet.uz'
 }
 
-# Telegramdagi barcha asosiy rasmiy kanallar va idoralar
 OFFICIAL_TELEGRAM = {
-    # Davlat va huquq-tartibot idoralari
     'davxizmat', 'uzgovuz', 'soliquz', 'cbu_uz', 'iivuz_official', 'mfa_uz', 'ssvuz',
     'procuratureuz', 'mibuz_official', 'customsuz', 'uzgidromet_kanal', 'kadastr_uz',
-    
-    # OAV va axborot agentliklari
     'kunuzofficial', 'gazetauz', 'daryo', 'uzreport_tv', 'qalampir', 'xabarz', 
     'uzauz', 'upluz', 'sputnikuzbekistan', 'uzdaily', 'xalqsizi', 'pravvost', 
     'forbesuzbekistan', 'spotuz', 'uzbekiston24',
-    
-    # Banklar va moliya tuzilmalari
     'agrobank_uz', 'kapitalbank_uz', 'anorbank', 'tbcbankuz', 'octobank', 'infinbank',
     'nbu_official', 'hamkorbank_uz', 'asakabank', 'sqbofficial', 'ipakyulibancofficial',
     'tengebank', 'universalbank_uz', 'ziraatbankuzbekistan', 'davrbank',
     'clickuz', 'payme_uz', 'uzcard_uz', 'humocard', 'uzumbank', 'uzummarket', 'paynetuz',
-    
-    # Diniy va ma'rifiy kanallar
     'muslimuzportal', 'fatvouz', 'ziyouz', 'hilolnashr', 'islomuz', 'buxariuz',
-    
-    # Brendlar, savdo va xizmatlar
     'asaxiy', 'olchouz', 'texnomart', 'express24', 'uzairways', 'uzbekistanrailways',
-    
-    # Aloqa operatorlari
     'beeline_uzbekistan', 'ucell', 'mobiuzuz', 'uztelecomuz', 'perfectum_official', 'humansuz'
 }
 
@@ -198,7 +176,6 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- MENYU TUGMALARINI SOZLASH (MENU BUTTON) ---
 async def set_default_commands(bot: Bot):
     commands = [
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
@@ -208,7 +185,6 @@ async def set_default_commands(bot: Bot):
     ]
     await bot.set_my_commands(commands)
 
-# Render port talab qilgani uchun oddiy HTTP server
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -224,7 +200,7 @@ def extract_url(text: str) -> str:
     words = text.split()
     for word in words:
         clean_word = word.strip(".,;:!?()[]{}\"'")
-        clean_lower = word.lower()
+        clean_lower = clean_word.lower()
         
         if "t.me/" in clean_lower or "telegram.me/" in clean_lower or clean_word.startswith(('http://', 'https://', 'www.')):
             return clean_word
@@ -246,8 +222,8 @@ def analyze_link(url: str, lang: str) -> str:
         if len(parts) > 1:
             path = parts[1].split("/")[0].strip()
             if path in OFFICIAL_TELEGRAM:
-                return TEXTS[lang]['safe_link'] + f" (@{path})"
-            return f"⚠️ Telegram channel/group (@{path}). Be careful, it might be fake!"
+                return "SAFE"
+            return f"DANGER: Telegram channel/group (@{path})"
 
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
@@ -257,21 +233,20 @@ def analyze_link(url: str, lang: str) -> str:
     if domain.startswith('www.'):
         domain = domain[4:]
         
-    # Asosiy qoida: Agar domen .gov.uz bilan tugasa, u avtomatik ravishda rasmiy davlat sayti hisoblanadi
     if domain.endswith('.gov.uz') or domain in OFFICIAL_DOMAINS:
-        return TEXTS[lang]['safe_link']
+        return "SAFE"
         
     for tld in SUSPICIOUS_TLDS:
         if domain.endswith(tld):
             stats["danger_count"] += 1
-            return TEXTS[lang]['danger_link']
+            return "DANGER"
             
     for brand in BRAND_KEYWORDS:
         if brand in domain:
             stats["danger_count"] += 1
-            return TEXTS[lang]['danger_link']
+            return "DANGER"
 
-    return TEXTS[lang]['warning_link']
+    return "WARNING"
 
 async def ask_gemini(text: str) -> str:
     try:
@@ -372,24 +347,54 @@ async def handle_photo(message: Message):
 async def handle_message(message: Message):
     user_id = message.from_user.id
     lang = get_user_lang(user_id)
-    current_time = time.time()
+    chat_type = message.chat.type  # 'private', 'group', 'supergroup'
     
-    if user_id in user_last_message_time:
-        if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
-            await message.answer(TEXTS[lang]['spam'])
-            return
-    user_last_message_time[user_id] = current_time
+    # Guruhlar uchun spam intervalini o'tkazib yuboramiz yoki alohida tutamiz
+    if chat_type == 'private':
+        current_time = time.time()
+        if user_id in user_last_message_time:
+            if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
+                await message.answer(TEXTS[lang]['spam'])
+                return
+        user_last_message_time[user_id] = current_time
 
     text = message.text.lower()
     found_scam = any(word in text for word in SCAM_WORDS)
     url = extract_url(message.text)
     
+    link_status = "SAFE"
+    if url:
+        link_status = analyze_link(url, lang)
+
+    # --- AGAR GURUH BO'LSA VA XAVFLI NARS TOPilsa ---
+    if chat_type in ['group', 'supergroup']:
+        is_dangerous = found_scam or (link_status.startswith("DANGER"))
+        if is_dangerous:
+            try:
+                # Xabarni o'chirish
+                await message.delete()
+                # Ogohlantirish yuborish
+                name = message.from_user.full_name
+                alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id)
+                await message.answer(alert_text, parse_mode="Markdown")
+            except Exception as e:
+                logging.error(f"Guruhda xabarni o'chirishda xatolik: {e}")
+            return
+        
+        # Agar guruhda xavfsiz bo'lsa, oddiy xabarlarga javob bermasligi uchun chiqib ketamiz (guruhni bezovta qilmaslik uchun)
+        return
+
+    # --- SHAXSIY XABARLAR (PM) UCHUN TO'LIQ JAVOB ---
     response_parts = []
     if found_scam:
         response_parts.append(TEXTS[lang]['scam_word'])
     if url:
-        res = analyze_link(url, lang)
-        response_parts.append(f"🔗 **Link analysis:**\n{res}")
+        if link_status.startswith("SAFE"):
+            response_parts.append(f"🔗 **Link analysis:**\n{TEXTS[lang]['safe_link']}")
+        elif link_status.startswith("DANGER"):
+            response_parts.append(f"🔗 **Link analysis:**\n{TEXTS[lang]['danger_link']}")
+        else:
+            response_parts.append(f"🔗 **Link analysis:**\n{TEXTS[lang]['warning_link']}")
     
     ai_res = await ask_gemini(message.text)
     if ai_res:
@@ -405,9 +410,7 @@ async def main():
     print("Bot va veb-server ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     
-    # Menyu tugmalarini o'rnatish
     await set_default_commands(bot)
-    
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
