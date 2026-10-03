@@ -207,12 +207,33 @@ async def set_commands():
 def extract_url(text: str):
     if not text:
         return None
+
+    # 1. Oddiy so‘zlarni tekshirish
     for word in text.split():
         clean = word.strip(".,;:!?()[]{}\"'")
-        if any(x in clean.lower() for x in ("t.me/", "http://", "https://", "www.")):
+
+        # To‘liq havola
+        if clean.startswith(("http://", "https://", "www.")):
+            return clean
+
+        # Telegram
+        if "t.me/" in clean.lower() or "telegram.me/" in clean.lower():
             return clean
         if clean.startswith("@") and len(clean) > 1:
             return f"t.me/{clean[1:]}"
+
+        # Oddiy domen (kun.uz, google.com, example.xyz va h.k.)
+        if "." in clean and " " not in clean and len(clean) > 3:
+            # Oddiy tekshiruv: kamida bitta nuqta va harf/raqam
+            parts = clean.split(".")
+            if len(parts) >= 2 and all(part.isalnum() or "-" in part for part in parts):
+                # Ma’lum kengaytmalar
+                if parts[-1].lower() in {
+                    "uz", "com", "net", "org", "ru", "info", "xyz", "site",
+                    "online", "me", "io", "co", "tv", "cc", "app", "dev"
+                }:
+                    return clean
+
     return None
 
 def get_webpage_screenshot(url: str) -> bytes | None:
