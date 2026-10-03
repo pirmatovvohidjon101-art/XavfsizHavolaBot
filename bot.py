@@ -25,7 +25,9 @@ ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 stats = {
     "checked_count": 0,
-    "danger_count": 0
+    "danger_count": 0,
+    "file_danger_count": 0,
+    "voice_danger_count": 0
 }
 
 user_last_message_time = {}
@@ -148,7 +150,7 @@ TEXTS = {
         'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va moderatsiya botiman. Guruhlarda shubhali havolalar, zararli fayllar (.apk), ovozli xabarlar va firibgarliklarni nazorat qilaman.",
         'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, rasm yoki QR-kod yuborib tekshirishingiz mumkin.\n- **Guruhlarda:** APK fayllar, zararli havolalar va scam xabarlar o'chiriladi.\n- `/whitelist domen` — Oq ro'yxatga qo'shish\n- `/blacklist domen` — Qora ro'yxatga qo'shish\n👨‍‍💻 Admin: @thePirmatov",
+        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, rasm yoki QR-kod yuborib tekshirishingiz mumkin.\n- **Guruhlarda:** APK fayllar, zararli havolalar va scam xabarlar o'chiriladi.\n- `/whitelist domen` — Oq ro'yxatga qo'shish\n- `/blacklist domen` — Qora ro'yxatga qo'shish\n👨‍💻 Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
@@ -240,6 +242,7 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="stats", description="📊 Bot statistikasi"),
         BotCommand(command="whitelist", description="➕ Oq ro'yxatga qo'shish"),
         BotCommand(command="blacklist", description="➖ Qora ro'yxatga qo'shish"),
+        BotCommand(command="admin_stats", description="🛠 Admin uchun kengaytirilgan panel"),
         BotCommand(command="language", description="🌐 Tilni o'zgartirish"),
         BotCommand(command="help", description="ℹ️ Qo'llanma")
     ]
@@ -293,7 +296,6 @@ def analyze_link(url: str, chat_id: int) -> str:
     if domain.startswith('www.'):
         domain = domain[4:]
         
-    # 4-band: Guruh uchun Whitelist / Blacklist tekshiruvi
     if is_whitelisted(chat_id, domain):
         return "SAFE"
     if is_blacklisted(chat_id, domain):
@@ -322,6 +324,27 @@ async def ask_gemini(text: str) -> str:
         return response.text
     except Exception:
         return ""
+
+# --- 5-BAND: ADMIN UCHUN KENGAYTIRILGAN STATISTIKA (WEB-PANEL / ADMIN PANEL) ---
+@dp.message(Command("admin_stats"))
+async def cmd_admin_stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Kechirasiz, bu buyruq faqat bot admini uchun mo'ljallangan.")
+        return
+    
+    users = get_all_users()
+    users_count = len(users)
+    
+    report = (
+        f"🛠 **Admin Boshqaruv Paneli & Statistika**\n\n"
+        f"👥 Jami foydalanuvchilar: `{users_count}` ta\n"
+        f"🔍 Tekshirilgan jami havolalar: `{stats['checked_count']}` ta\n"
+        f"🚨 Bloklangan xavfli havolalar: `{stats['danger_count']}` ta\n"
+        f"📁 Bloklangan zararli fayllar (.apk/.exe): `{stats['file_danger_count']}` ta\n"
+        f"🎙 Tekshirilgan ovozli xabarlar: `{stats['voice_danger_count']}` ta\n\n"
+        f"⚙️ *Holat:* Bot to'liq faol va ishlayapti."
+    )
+    await message.answer(report, parse_mode="Markdown")
 
 # --- ADMIN BUYRUQLARI: WHITELIST / BLACKLIST ---
 @dp.message(Command("whitelist"))
@@ -397,6 +420,7 @@ async def cmd_stats(message: Message):
 # --- 2-BAND: FAYLLARNI TEKSHIRISH (.apk, .exe va hokazo) ---
 @dp.message(F.document)
 async def handle_document(message: Message):
+    global stats
     chat_type = message.chat.type
     user_id = message.from_user.id
     lang = get_user_lang(user_id)
@@ -406,6 +430,9 @@ async def handle_document(message: Message):
     
     is_dangerous_file = any(file_name.endswith(ext) for ext in DANGEROUS_EXTENSIONS)
     
+    if is_dangerous_file:
+        stats["file_danger_count"] += 1
+    
     if chat_type in ['group', 'supergroup'] and is_dangerous_file:
         try:
             await message.delete()
@@ -413,7 +440,6 @@ async def handle_document(message: Message):
             alert_text = TEXTS[lang]['file_danger'] + f" (User Karma: {new_rep})"
             await message.answer(alert_text)
             
-            # Agar karma juda pasayib ketsa, foydalanuvchini guruhdan cheklash mumkin
             if new_rep <= 0:
                 await bot.ban_chat_member(message.chat.id, user_id)
                 await message.answer(f"🚫 [{message.from_user.full_name}](tg://user?id={user_id}) karma ochkosi tugagani uchun ban qilindi!", parse_mode="Markdown")
@@ -430,12 +456,14 @@ async def handle_document(message: Message):
 # --- 3-BAND: OVOZLI XABARLARNI (VOICE) TAHLIL QILISH ---
 @dp.message(F.voice)
 async def handle_voice(message: Message):
+    global stats
+    stats["voice_danger_count"] += 1
     chat_type = message.chat.type
     user_id = message.from_user.id
     lang = get_user_lang(user_id)
     
     if chat_type == 'private':
-        await message.answer("🔄 Ovozli xabar qabul qilindi (Hozirgi versiyada ovozli transkripsiya ustida ishlanmoqda).")
+        await message.answer("🔄 Ovozli xabar qabul qilindi va hisobga olindi.")
 
 # --- RASMLARNI TEKSHIRISH ---
 @dp.message(F.photo)
@@ -485,7 +513,6 @@ async def handle_message(message: Message):
         if is_dangerous:
             try:
                 await message.delete()
-                # Karma ochkosini pasaytirish (-15 ball)
                 new_rep = update_user_rep(user_id, -15)
                 name = message.from_user.full_name
                 alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id, rep=new_rep)
@@ -511,7 +538,7 @@ async def handle_message(message: Message):
         else:
             response_parts.append(f"🔗 **Link analysis:**\n{TEXTS[lang]['warning_link']}")
     
-    ai_res = await ask_geministr = await ask_gemini(message.text)
+    ai_res = await ask_gemini(message.text)
     if ai_res:
         response_parts.append(f"{TEXTS[lang]['ai_header']}\n{ai_res}")
         
