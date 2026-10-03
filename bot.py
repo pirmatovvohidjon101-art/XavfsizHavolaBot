@@ -265,41 +265,63 @@ async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
     last_error = ""
     for model in MODELS:
         try:
-            response = ai_client.models.generate_content(
-                model=model,
-                contents=[
-                    prompt,
-                    types.Part.from_bytes(data=data, mime_type=mime)
-                ]
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai_client.models.generate_content,
+                    model=model,
+                    contents=[
+                        prompt,
+                        types.Part.from_bytes(data=data, mime_type=mime)
+                    ]
+                ),
+                timeout=14.0
             )
             logging.info(f"Muvaffaqiyatli model: {model}")
             return response.text or ""
+        except asyncio.TimeoutError:
+            last_error = f"{model} timeout"
+            logging.warning(last_error)
+            continue
         except Exception as e:
             last_error = str(e)
             logging.warning(f"{model} xato: {e}")
             if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1)
                 continue
             continue
     return f"ERROR: Barcha modellar band. Oxirgi xato: {last_error[:120]}"
 
 async def text_with_gemini(prompt: str) -> str:
-    last_error = ""
+    last_error = "Noma'lum xato"
+    
     for model in MODELS:
         try:
-            response = ai_client.models.generate_content(
-                model=model,
-                contents=prompt
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ai_client.models.generate_content,
+                    model=model,
+                    contents=prompt
+                ),
+                timeout=12.0
             )
             return response.text or "Javob bo‘sh keldi."
+        except asyncio.TimeoutError:
+            last_error = f"{model} — vaqt tugadi (timeout)"
+            logging.warning(last_error)
+            continue
         except Exception as e:
             last_error = str(e)
-            logging.warning(f"Model {model} xato: {e}")
+            logging.warning(f"{model} xato: {e}")
             if "503" in str(e) or "high demand" in str(e).lower() or "UNAVAILABLE" in str(e):
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1)
                 continue
             continue
-    return f"ERROR: Hozir barcha AI modellar band. Keyinroq qayta urinib ko‘ring.\nOxirgi xato: {last_error[:100]}"
+    
+    return (
+        "❌ Hozir AI modellar juda band yoki limitga urilgan.\n\n"
+        "Iltimos, 1-2 daqiqadan keyin qayta urinib ko‘ring.\n\n"
+        f"Texnik ma’lumot: {last_error[:120]}"
+    )
 
 # ==================== HANDLERS ====================
 @dp.message(Command("start"))
@@ -336,19 +358,22 @@ async def cmd_audit(message: Message):
         parse_mode="Markdown"
     )
 
-    result = await text_with_gemini(
-        f"Professional cybersecurity OSINT audit of '{target}'. "
-        f"Write a clear, structured report in Uzbek language. "
-        f"Include: possible risks, legitimacy, recommendations."
-    )
+    try:
+        result = await text_with_gemini(
+            f"Professional cybersecurity OSINT audit of '{target}'. "
+            f"Write a clear, structured report in Uzbek language. "
+            f"Include: possible risks, legitimacy, recommendations."
+        )
+    except Exception as e:
+        result = f"❌ Kutilmagan xato: {str(e)[:100]}"
 
     try:
         await wait_msg.delete()
     except:
         pass
 
-    if result.startswith("ERROR"):
-        await message.answer(f"❌ {result}")
+    if result.startswith("ERROR") or result.startswith("❌"):
+        await message.answer(result)
     else:
         if len(result) > 4000:
             for i in range(0, len(result), 4000):
@@ -527,7 +552,6 @@ async def handle_text(message: Message):
 
     stats["checked_count"] += 1
 
-    # Telegram profil / kanal
     if url.startswith("t.me/") or "t.me/" in url or "telegram.me/" in url:
         clean_target = url.replace("https://", "").replace("http://", "").replace("t.me/", "").replace("telegram.me/", "").strip("/")
         await message.reply(
@@ -764,7 +788,7 @@ async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot muvaffaqiyatli ishga tushdi")
+    print("✅ Bot muvaffaqiyatli ishga tushdi (timeout + mustahkam xato ushlash bilan)")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
