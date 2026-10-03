@@ -85,7 +85,7 @@ TEXTS = {
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
         'help': "ℹ️ Qo'llanma:\n\n- Menga istalgan havola (link) yuboring — xavfsizligini tekshirib beraman.\n- Matn yuborsangiz — AI orqali firibgarlik alomatlarini aniqlayman.\n- Rasm yoki QR-kod yuborsangiz — o'qib, tahlil qilib beraman. \n 👨‍💻Admin: @thePirmatov",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
-        'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
+        'spam': "⚠️️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
         'danger_link': "🚨 DIQQAT! XAVFLI HAVOLA! Firibgarlar tuzog'i bo'lishi mumkin.",
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
@@ -116,7 +116,7 @@ TEXTS = {
         'spam': "⚠️ You are sending messages too fast! Please wait.",
         'safe_link': "✅ This is an **official and trusted** resource.",
         'danger_link': "🚨 **ATTENTION! DANGEROUS LINK!** This might be a scam.",
-        'warning_link': "⚠️️ **Unknown link.** Be careful when entering your personal data.",
+        'warning_link': "⚠ **Unknown link.** Be careful when entering your personal data.",
         'scam_word': "🛑 **ATTENTION! Scam patterns detected in the text!**",
         'ai_header': "🤖 **AI Analysis:**",
         'clean': "✅ No dangerous elements found, but stay vigilant."
@@ -154,7 +154,7 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
         BotCommand(command="stats", description="📊 Bot statistikasi"),
         BotCommand(command="language", description="🌐 Tilni o'zgartirish"),
-        BotCommand(command="help", description="ℹ️ Qo'llanma va yordam")
+        BotCommand(command="help", description="ℹ️️ Qo'llanma va yordam")
     ]
     await bot.set_my_commands(commands)
 
@@ -171,6 +171,19 @@ def run_http_server():
     server.serve_forever()
 
 def extract_url(text: str) -> str:
+    words = text.split()
+    for word in words:
+        clean_word = word.strip(".,;:!?()[]{}\"'")
+        clean_lower = clean_word.lower()
+        
+        # Telegram havolalari va boshqa veb havolalarni ushlash
+        if "t.me/" in clean_lower or "telegram.me/" in clean_lower or clean_word.startswith(('http://', 'https://', 'www.')):
+            return clean_word
+            
+        # Agar foydalanuvchi @username yuborsa, uni ham tekshirish uchun formatlaymiz
+        if clean_word.startswith('@') and len(clean_word) > 1:
+            return f"t.me/{clean_word[1:]}"
+
     url_pattern = re.compile(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9()@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
     match = url_pattern.search(text)
     return match.group(0) if match else None
