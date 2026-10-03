@@ -523,7 +523,23 @@ async def handle_text(message: Message):
         return
 
     stats["checked_count"] += 1
-    parsed = urlparse(url if url.startswith(("http://", "https://")) else "https://" + url)
+
+    # === TELEGRAM PROFIL / KANAL ===
+    if url.startswith("t.me/") or "t.me/" in url or "telegram.me/" in url:
+        clean_target = url.replace("https://", "").replace("http://", "").replace("t.me/", "").replace("telegram.me/", "").strip("/")
+        
+        await message.reply(
+            f"🔗 **Telegram profil/kanal:** `{clean_target}`\n\n"
+            f"Telegram sahifalaridan skrinshot olinmaydi.\n"
+            f"Chuqur tekshirish uchun yozing:\n"
+            f"`/audit {clean_target}`",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Oddiy saytlar uchun
+    full_url = url if url.startswith(("http://", "https://")) else "https://" + url
+    parsed = urlparse(full_url)
     domain = parsed.netloc.lower().removeprefix("www.")
 
     if is_globally_blacklisted(domain):
@@ -538,7 +554,8 @@ async def handle_text(message: Message):
         await message.reply("✅ Rasmiy va ishonchli manzil.")
         return
 
-    shot = get_webpage_screenshot(url)
+    # Skrinshot olish
+    shot = get_webpage_screenshot(full_url)
     if shot:
         stats["screenshot_count"] += 1
         prompt = (
