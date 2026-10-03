@@ -33,11 +33,10 @@ stats = {
     "voice_danger_count": 0
 }
 
-# --- 1. HIMoya: Flood Control (Spam va DoS oldini olish uchun vaqtinchalik xotira) ---
 user_last_message_time = {}
-SPAM_INTERVAL = 1.2  # Foydalanuvchi har 1.2 sekundda 1 tadan ortiq xabar yubora olmaydi
+SPAM_INTERVAL = 1.2
 
-# --- BAZA BILAN ISHLASH (SQLITE - Parametrli so'rovlar orqali SQL Injection'dan himoyalangan) ---
+# --- BAZA BILAN ISHLASH ---
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -70,7 +69,6 @@ def init_db():
 init_db()
 
 def add_user(user_id, username, full_name):
-    # Xavfsizlik: Username va Full_name ni tozalash (XSS/Script injection oldini olish)
     safe_username = str(username)[:50] if username else ""
     safe_fullname = str(full_name)[:100] if full_name else "Foydalanuvchi"
     
@@ -150,10 +148,10 @@ def is_blacklisted(chat_id, domain):
 # --- TARJIMALAR ---
 TEXTS = {
     'uz': {
-        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va AI yordamchi botiman. Guruhlarda shubhali havolalar, zararli fayllar, soxta cheklar, ovozli xabarlar va QR-kodlarni nazorat qilaman.",
-        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n🎙️ Xavfli ovozlar: {voice}\n👥 Foydalanuvchilar: {users}",
+        'start': "👋 Assalomu alaykum!\n\nMen xavfsizlik va AI yordamchi botiman. Guruhlarda shubhali havolalar, zararli fayllar va APK dasturlarni nazorat qilaman.",
+        'stats': "📊 **Bot Statistikasi:**\n\n🔍 Tekshirilgan havolalar: {checked}\n🚨 Xavfli havolalar: {danger}\n📦 Xavfli fayllar: {file_danger}\n🎙️ Xavfli ovozlar: {voice}\n👥 Foydalanuvchilar: {users}",
         'lang_set': "✅ Til o'zbek tiliga o'zgartirildi.",
-        'help': "ℹ️ **Qo'llanma:**\n- Havola, matn, ovozli xabar, to'lov cheki yoki QR-kod yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli havolasi\n- `/whitelist` / `/blacklist` — Ro'yxatni boshqarish",
+        'help': "ℹ️ **Qo'llanma:**\n- Havola, fayl, APK, ovozli xabar yoki to'lov cheki yuborib tekshirishingiz mumkin.\n- `/top` — Reyting\n- `/web` — Admin veb-paneli havolasi",
         'lang_prompt': "🌐 Marhamat, tilni tanlang:",
         'spam': "⚠️ Juda tez-tez xabar yuboryapsiz! Iltimos, biroz kuting.",
         'safe_link': "✅ Bu rasmiy va ishonchli manzil.",
@@ -161,15 +159,16 @@ TEXTS = {
         'warning_link': "⚠️ Noma'lum havola. Shaxsiy ma'lumotlarni kiritishda ehtiyot bo'ling!",
         'scam_word': "🛑 DIQQAT! Matnda firibgarlikka xos so'zlar aniqlandi!",
         'ai_header': "🤖 Sun'iy Intellekt (AI) javobi:",
-        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/havola yuborgani uchun xabar o'chirildi va karma ochkosi kamaytirildi! (Reputation: {rep})",
+        'group_danger_alert': "🚨 DIQQAT! [{user}](tg://user?id={uid}) xavfli xabar/fayl yuborgani uchun xabar o'chirildi va karma kamaytirildi! (Reputation: {rep})",
         'voice_danger': "🚨 DIQQAT! Ovozli xabarda firibgarlik (pul so'rash/aldash) alomatlari aniqlandi va xabar o'chirildi!",
+        'file_danger': "🚨 DIQQAT! Ushbu fayl (APK/Zararli dastur) xavfli deb topildi va o'chirildi!",
         'file_too_large': "⚠️ Fayl hajmi juda katta (maksimal 20 MB ruxsat etiladi)."
     },
     'ru': {
         'start': "👋 Здравствуйте!\n\nЯ бот безопасности и ИИ-помощник.",
-        'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n👥 Пользователей: {users}",
+        'stats': "📊 **Статистика бота:**\n\n🔍 Проверено ссылок: {checked}\n🚨 Опасных ссылок: {danger}\n📦 Опасных файлов: {file_danger}\n👥 Пользователей: {users}",
         'lang_set': "✅ Язык изменен на русский.",
-        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, текст, чеки, фото, файлы, голосовые.\n- `/top` — Рейтинг",
+        'help': "ℹ️ **Справка:**\n- Проверяю ссылки, файлы, APK, чеки, голосовые.",
         'lang_prompt': "🌐 Пожалуйста, выберите язык:",
         'spam': "⚠️ Слишком частые запросы!",
         'safe_link': "✅ Это официальный ресурс.",
@@ -179,13 +178,14 @@ TEXTS = {
         'ai_header': "🤖 Ответ ИИ:",
         'group_danger_alert': "🚨 ВНИМАНИЕ! Сообщение удалено за нарушение безопасности!",
         'voice_danger': "🚨 ВНИМАНИЕ! В голосовом сообщении обнаружены признаки мошенничества!",
+        'file_danger': "🚨 ВНИМАНИЕ! Файл (APK/вредоносное ПО) заблокирован!",
         'file_too_large': "⚠️ Файл слишком большой."
     },
     'en': {
         'start': "👋 Hello!\n\nI am a security & AI assistant bot protecting chats.",
-        'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n👥 Users: {users}",
+        'stats': "📊 **Bot Statistics:**\n\n🔍 Checked links: {checked}\n🚨 Dangerous links: {danger}\n📦 Dangerous files: {file_danger}\n👥 Users: {users}",
         'lang_set': "✅ Language changed to English.",
-        'help': "ℹ **Help:**\n- Check links, text, payment receipts, voice, files, or chat with AI.\n- `/top` — Leaderboard",
+        'help': "ℹ **Help:**\n- Check links, files, APK, payment receipts, voice.",
         'lang_prompt': "🌐 Please select a language:",
         'spam': "⚠️ Too fast requests!",
         'safe_link': "✅ Official resource.",
@@ -195,11 +195,14 @@ TEXTS = {
         'ai_header': "🤖 AI Response:",
         'group_danger_alert': "🚨 ATTENTION! Message deleted due to security violation!",
         'voice_danger': "🚨 ATTENTION! Scam patterns detected in voice message!",
+        'file_danger': "🚨 ATTENTION! Dangerous file (APK/Malware) blocked!",
         'file_too_large': "⚠️ File is too large."
     }
 }
 
 SUSPICIOUS_TLDS = ['.xyz', '.cc', '.tk', '.buzz', '.top', '.gq', '.ml', '.cf', '.ru.com', '.online', '.site', '.club', '.work', '.click', '.link', '.pw', '.su', '.bid', '.loan', '.win', '.stream', '.icu', '.cam', '.cfd', '.VIP']
+
+DANGEROUS_FILE_EXTENSIONS = ['.apk', '.exe', '.bat', '.scr', '.js', '.vbs', '.cmd', '.msi', '.pif', '.com']
 
 OFFICIAL_DOMAINS = {
     'gov.uz', 'my.gov.uz', 'pm.gov.uz', 'lex.uz', 'cbu.uz', 'stat.uz', 'customs.uz',
@@ -242,12 +245,11 @@ async def set_default_commands(bot: Bot):
         BotCommand(command="web", description="🌐 Admin veb-paneli"),
         BotCommand(command="whitelist", description="➕ Oq ro'yxat"),
         BotCommand(command="blacklist", description="➖ Qora ro'yxat"),
-        BotCommand(command="report", description="✉️ Shikoyat"),
         BotCommand(command="help", description="ℹ️ Qo'llanma")
     ]
     await bot.set_my_commands(commands)
 
-# --- WEB PANEL & HEALTH CHECK SERVER ---
+# --- WEB PANEL ---
 class WebPanelHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_path = urlparse(self.path)
@@ -285,26 +287,14 @@ class WebPanelHandler(BaseHTTPRequestHandler):
                 </style>
             </head>
             <body>
-                <h1>🛡️ Bot Admin Boshqaruv Paneli (Himoyalangan)</h1>
+                <h1>🛡️ Bot Admin Boshqaruv Paneli</h1>
                 <div class="card">
                     <h3>📊 Statistika</h3>
                     <p>Tekshirilgan havolalar: <b>{stats['checked_count']}</b></p>
                     <p>Bloklangan xavfli havolalar: <b>{stats['danger_count']}</b></p>
+                    <p>Bloklangan xavfli fayllar: <b>{stats['file_danger_count']}</b></p>
                     <p>Xavfli ovozli xabarlar: <b>{stats['voice_danger_count']}</b></p>
                     <p>Jami foydalanuvchilar: <b>{len(users)}</b></p>
-                </div>
-                <div class="card">
-                    <h3>🛑 Qora Ro'yxatdagi Domenlar</h3>
-                    <ul>
-                        {"".join([f"<li>{d[0]}</li>" for d in blacklist]) if blacklist else "<li>Ro'yxat bo'sh</li>"}
-                    </ul>
-                </div>
-                <div class="card">
-                    <h3>👥 Foydalanuvchilar Ro'yxati</h3>
-                    <table>
-                        <tr><th>ID</th><th>To'liq Ismi</th><th>Username</th><th>Karma</th></tr>
-                        {"".join([f"<tr><td>{u[0]}</td><td>{u[2]}</td><td>@{u[1] if u[1] else '-'}</td><td>{u[3]}</td></tr>" for u in users])}
-                    </table>
                 </div>
             </body>
             </html>
@@ -319,7 +309,6 @@ class WebPanelHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def log_message(self, format, *args):
-        # Server loglarini tozalash va xakerlar skanerlashini yashirish
         return
 
 def run_http_server():
@@ -338,10 +327,7 @@ def extract_url(text: str) -> str:
             return clean_word
         if clean_word.startswith('@') and len(clean_word) > 1:
             return f"t.me/{clean_word[1:]}"
-
-    url_pattern = re.compile(r'https?://[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9()@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)')
-    match = url_pattern.search(text)
-    return match.group(0) if match else None
+    return None
 
 def check_urlhaus(url: str) -> bool:
     try:
@@ -400,7 +386,6 @@ def analyze_link(url: str, chat_id: int) -> str:
 
 async def ask_gemini(text: str) -> str:
     try:
-        # Xavfsizlik: Matn uzunligini qisqartirish (prompt injection yoki xotirani shishirish oldini olish)
         safe_text = text[:1500]
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
@@ -430,7 +415,6 @@ async def cmd_web(message: Message):
 @dp.message(Command("whitelist"))
 async def cmd_whitelist(message: Message):
     if message.from_user.id != ADMIN_ID and message.chat.type != 'private':
-        # Guruhda faqat adminlar whitelist qo'shishi mumkin
         return
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
@@ -497,7 +481,46 @@ async def report_scam_callback(callback: CallbackQuery):
     await callback.message.edit_text(f"🚨 `{domain}` qora ro'yxatga qo'shildi! Rahmat (+5 karma).", parse_mode="Markdown")
     await callback.answer()
 
-# --- OVOZLI XABARLARNI TEKSHIRISH (Hajm nazorati bilan) ---
+# --- 1. FAYLLAR VA APK (ANTIVIRUS) TEKSHIRUVI ---
+@dp.message(F.document)
+async def handle_document(message: Message):
+    user_id = message.from_user.id
+    add_user(user_id, message.from_user.username, message.from_user.full_name)
+    lang = get_user_lang(user_id)
+    chat_type = message.chat.type
+
+    document = message.document
+    file_name = document.file_name.lower() if document.file_name else ""
+    
+    if document.file_size and document.file_size > 20 * 1024 * 1024:
+        await message.answer(TEXTS[lang]['file_too_large'])
+        return
+
+    # Fayl kengaytmasini tekshirish (.apk, .exe va hokazo)
+    is_dangerous_file = any(file_name.endswith(ext) for ext in DANGEROUS_FILE_EXTENSIONS)
+
+    if is_dangerous_file:
+        stats["file_danger_count"] += 1
+        if chat_type in ['group', 'supergroup']:
+            try:
+                await message.delete()
+                new_rep = update_user_rep(user_id, -25)
+                name = message.from_user.full_name
+                alert_text = TEXTS[lang]['group_danger_alert'].format(user=name, uid=user_id, rep=new_rep)
+                await message.answer(alert_text, parse_mode="Markdown")
+                if new_rep <= 0:
+                    await bot.ban_chat_member(message.chat.id, user_id)
+            except Exception:
+                pass
+            return
+        else:
+            await message.answer(TEXTS[lang]['file_danger'])
+            return
+
+    if chat_type == 'private':
+        await message.answer(f"✅ `{document.file_name}` qabul qilindi. Shubhali zararli kodlar topilmadi.", parse_mode="Markdown")
+
+# --- OVOZLI XABARLARNI TEKSHIRISH ---
 @dp.message(F.voice)
 async def handle_voice(message: Message):
     user_id = message.from_user.id
@@ -506,7 +529,7 @@ async def handle_voice(message: Message):
     chat_type = message.chat.type
 
     voice = message.voice
-    if voice.file_size and voice.file_size > 15 * 1024 * 1024:  # 15 MB dan katta ovozlarni rad etish
+    if voice.file_size and voice.file_size > 15 * 1024 * 1024:
         await message.answer(TEXTS[lang]['file_too_large'])
         return
 
@@ -549,7 +572,7 @@ async def handle_voice(message: Message):
         if chat_type == 'private':
             await message.answer("❌ Ovozli xabarni tahlil qilishda xatolik yuz berdi.")
 
-# --- FOTO VA CHEKLARNI TEKSHIRISH (Hajm nazorati bilan) ---
+# --- FOTO VA CHEKLARNI TEKSHIRISH ---
 @dp.message(F.photo)
 async def handle_photo(message: Message):
     user_id = message.from_user.id
@@ -591,7 +614,7 @@ async def handle_photo(message: Message):
     except Exception:
         await message.answer("❌ Rasmni tahlil qilishda xatolik yuz berdi.")
 
-# --- MATN VA HAVOLALARNI TEKSHIRISH (Flood Control bilan) ---
+# --- MATN VA HAVOLALARNI TEKSHIRISH ---
 @dp.message(F.text)
 async def handle_message(message: Message):
     user_id = message.from_user.id
@@ -599,7 +622,6 @@ async def handle_message(message: Message):
     lang = get_user_lang(user_id)
     chat_type = message.chat.type
     
-    # Flood Control (Spamdan himoya)
     current_time = time.time()
     if user_id in user_last_message_time:
         if current_time - user_last_message_time[user_id] < SPAM_INTERVAL:
@@ -660,7 +682,7 @@ async def handle_message(message: Message):
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
-    print("Himoyalangan bot va veb-panel serveri ishga tushdi...")
+    print("Fayl filtri qo'shilgan bot va veb-panel serveri ishga tushdi...")
     await bot.delete_webhook(drop_pending_updates=True)
     await set_default_commands(bot)
     await dp.start_polling(bot)
