@@ -8,18 +8,21 @@ import requests
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, BotCommand, BotCommandScopeChat, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+
 from google import genai
 from google.genai import types
 from PIL import Image
 import cv2
 import numpy as np
 
+# ==================== SOZLAMALAR ====================
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN topilmadi!")
@@ -27,32 +30,48 @@ if not TOKEN:
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 ADMIN_PANEL_SECRET = os.getenv("ADMIN_PANEL_SECRET", "kiber_secret_2026")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")  # Botdagi login paroli
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL_NAME = "gemini-2.0-flash"  # Barqaror va bepul
+MODEL_NAME = "gemini-2.0-flash"
 
 stats = {
-    "checked_count": 0, "danger_count": 0, "file_danger_count": 0,
-    "voice_danger_count": 0, "video_danger_count": 0, "photo_danger_count": 0,
-    "screenshot_count": 0, "audit_count": 0
+    "checked_count": 0,
+    "danger_count": 0,
+    "file_danger_count": 0,
+    "voice_danger_count": 0,
+    "video_danger_count": 0,
+    "photo_danger_count": 0,
+    "screenshot_count": 0,
+    "audit_count": 0,
 }
 
 user_last_message_time = {}
 SPAM_INTERVAL = 1.3
-pending_admin_auth = {}  # user_id -> True (parol kutilyapti)
 
 # ==================== DATABASE ====================
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
-        language TEXT DEFAULT 'uz', reputation INTEGER DEFAULT 100)""")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            full_name TEXT,
+            language TEXT DEFAULT 'uz',
+            reputation INTEGER DEFAULT 100
+        )
+    """)
     c.execute("CREATE TABLE IF NOT EXISTS blacklist (domain TEXT PRIMARY KEY)")
-    c.execute("""CREATE TABLE IF NOT EXISTS activity_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
-        action TEXT, details TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            action TEXT,
+            details TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -62,18 +81,25 @@ def log_activity(user_id, action, details):
     try:
         conn = sqlite3.connect("bot_database.db")
         c = conn.cursor()
-        c.execute("INSERT INTO activity_logs (user_id, action, details) VALUES (?,?,?)",
-                  (user_id, action, str(details)[:200]))
+        c.execute(
+            "INSERT INTO activity_logs (user_id, action, details) VALUES (?, ?, ?)",
+            (user_id, action, str(details)[:200])
+        )
         conn.commit()
         conn.close()
-    except: pass
+    except Exception:
+        pass
 
 def add_user(user_id, username, full_name):
     conn = sqlite3.connect("bot_database.db")
     c = conn.cursor()
-    c.execute("""INSERT INTO users (user_id, username, full_name) VALUES (?,?,?)
-                 ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, full_name=excluded.full_name""",
-              (user_id, str(username or "")[:50], str(full_name or "User")[:100]))
+    c.execute("""
+        INSERT INTO users (user_id, username, full_name)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            full_name = excluded.full_name
+    """, (user_id, str(username or "")[:50], str(full_name or "User")[:100]))
     conn.commit()
     conn.close()
 
@@ -101,7 +127,7 @@ def is_globally_blacklisted(domain):
 
 # ==================== TEXTS ====================
 TEXTS = {
-    'start': (
+    "start": (
         "👋 Assalomu alaykum!\n\n"
         "Men **AI Kiber-Xavfsizlik Botiman**.\n\n"
         "🔹 Havolalar (phishing)\n"
@@ -113,7 +139,7 @@ TEXTS = {
         "🔹 `/report` — shubhali narsani yuborish\n\n"
         "Xavfsiz bo‘ling!"
     ),
-    'help': (
+    "help": (
         "ℹ️ **Qo‘llanma**\n\n"
         "• `/start` — Botni ishga tushirish\n"
         "• `/audit <havola>` — Kiber-audit\n"
@@ -127,33 +153,35 @@ TEXTS = {
         "• Video (Deepfake)\n\n"
         "Guruhlarda ham ishlaydi."
     ),
-    'spam': "⚠️ Juda tez-tez yuboryapsiz. Biroz kuting.",
-    'apk_danger': "🚨 **XAVFLI FAYL!**\n\nBu `.apk` yoki zararli fayl. **Ochmang va o‘rnatmang!**",
-    'voice_danger': "🚨 **Vishing / Voice Cloning** aniqlandi!",
-    'photo_danger': "🚨 Rasmda **firibgarlik / xavfli QR** alomatlari bor!",
-    'video_danger': "🚨 Videoda **Deepfake yoki soxta video** alomatlari bor!",
+    "spam": "⚠️ Juda tez-tez yuboryapsiz. Biroz kuting.",
+    "apk_danger": "🚨 **XAVFLI FAYL!**\n\nBu `.apk` yoki zararli fayl. **Ochmang va o‘rnatmang!**",
+    "voice_danger": "🚨 **Vishing / Voice Cloning** aniqlandi!",
+    "photo_danger": "🚨 Rasmda **firibgarlik / xavfli QR** alomatlari bor!",
+    "video_danger": "🚨 Videoda **Deepfake yoki soxta video** alomatlari bor!",
 }
 
 OFFICIAL_DOMAINS = {
-    'gov.uz', 'my.gov.uz', 'lex.uz', 'cbu.uz', 'soliq.uz', 'my.soliq.uz',
-    'nbu.uz', 'agrobank.uz', 'kapitalbank.uz', 'hamkorbank.uz', 'tbcbank.uz',
-    'uzcard.uz', 'humocard.uz', 'click.uz', 'payme.uz', 'uzum.uz', 'uzumbank.uz',
-    'kun.uz', 'daryo.uz', 'gazeta.uz', 'beeline.uz', 'ucell.uz', 'uztelecom.uz'
+    "gov.uz", "my.gov.uz", "lex.uz", "cbu.uz", "soliq.uz", "my.soliq.uz",
+    "nbu.uz", "agrobank.uz", "kapitalbank.uz", "hamkorbank.uz", "tbcbank.uz",
+    "uzcard.uz", "humocard.uz", "click.uz", "payme.uz", "uzum.uz", "uzumbank.uz",
+    "kun.uz", "daryo.uz", "gazeta.uz", "beeline.uz", "ucell.uz", "uztelecom.uz"
 }
 
-DANGEROUS_EXTENSIONS = {'.apk', '.exe', '.bat', '.cmd', '.scr', '.js', '.vbs', '.msi', '.jar', '.com'}
+DANGEROUS_EXTENSIONS = {
+    ".apk", ".exe", ".bat", ".cmd", ".scr", ".js", ".vbs",
+    ".msi", ".jar", ".com", ".pif", ".hta"
+}
 
+# ==================== BOT ====================
 logging.basicConfig(level=logging.INFO)
 storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
 
-# ==================== ADMIN AUTH STATE ====================
 class AdminAuth(StatesGroup):
     waiting_password = State()
 
 async def set_commands():
-    # Oddiy foydalanuvchilar uchun
     default_cmds = [
         BotCommand(command="start", description="🚀 Botni ishga tushirish"),
         BotCommand(command="audit", description="🕵️‍♂️ Kiber-audit"),
@@ -162,7 +190,7 @@ async def set_commands():
     ]
     await bot.set_my_commands(default_cmds)
 
-    # Faqat admin uchun qo‘shimcha buyruq
+    # Faqat admin uchun
     admin_cmds = default_cmds + [
         BotCommand(command="panel", description="🔐 Admin Panel"),
     ]
@@ -170,7 +198,8 @@ async def set_commands():
 
 # ==================== HELPERS ====================
 def extract_url(text: str):
-    if not text: return None
+    if not text:
+        return None
     for word in text.split():
         clean = word.strip(".,;:!?()[]{}\"'")
         if any(x in clean.lower() for x in ("t.me/", "http://", "https://", "www.")):
@@ -179,18 +208,21 @@ def extract_url(text: str):
             return f"t.me/{clean[1:]}"
     return None
 
-def get_webpage_screenshot(url: str) -> bytes:
+def get_webpage_screenshot(url: str) -> bytes | None:
     try:
         full = url if url.startswith(("http://", "https://")) else "https://" + url
-        r = requests.get(f"https://api.microlink.io/?url={full}&screenshot=true&meta=false&embed=screenshot.url", timeout=9)
+        r = requests.get(
+            f"https://api.microlink.io/?url={full}&screenshot=true&meta=false&embed=screenshot.url",
+            timeout=9
+        )
         data = r.json()
         if data.get("status") == "success":
             return requests.get(data["data"]["screenshot"]["url"], timeout=9).content
-    except: pass
+    except Exception:
+        pass
     return None
 
 def detect_qr(image_bytes: bytes) -> str | None:
-    """Mahalliy (tekin) QR aniqlash — OpenCV"""
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -200,16 +232,16 @@ def detect_qr(image_bytes: bytes) -> str | None:
         data, _, _ = detector.detectAndDecode(img)
         return data if data else None
     except Exception as e:
-        logging.error(f"QR detect error: {e}")
+        logging.error(f"QR error: {e}")
         return None
 
 async def notify_admin(text: str):
     try:
         await bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
-    except: pass
+    except Exception:
+        pass
 
 async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
-    """To‘g‘ri multimodal chaqiriq"""
     try:
         response = ai_client.models.generate_content(
             model=MODEL_NAME,
@@ -221,25 +253,24 @@ async def analyze_with_gemini(prompt: str, data: bytes, mime: str) -> str:
         return response.text or ""
     except Exception as e:
         logging.error(f"Gemini error: {e}")
-        return f"ERROR: {str(e)[:120]}"
+        return f"ERROR: {str(e)[:150]}"
 
 # ==================== HANDLERS ====================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     add_user(message.from_user.id, message.from_user.username, message.from_user.full_name)
     log_activity(message.from_user.id, "START", "start")
-    await message.answer(TEXTS['start'], parse_mode="Markdown")
+    await message.answer(TEXTS["start"], parse_mode="Markdown")
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
-    await message.answer(TEXTS['help'], parse_mode="Markdown")
+    await message.answer(TEXTS["help"], parse_mode="Markdown")
 
 @dp.message(Command("report"))
 async def cmd_report(message: Message):
     await message.answer(
         "📢 **Shubhali narsani yuboring**\n\n"
-        "Havola, rasm, video, fayl yoki ovozli xabarni shu yerga yuboring.\n"
-        "Men uni tekshiraman va kerak bo‘lsa adminga yuboraman.",
+        "Havola, rasm, video, fayl yoki ovozli xabarni shu yerga yuboring.",
         parse_mode="Markdown"
     )
 
@@ -274,7 +305,7 @@ async def process_admin_password(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await state.clear()
         return
-    if message.text.strip() == ADMIN_PASSWORD:
+    if message.text and message.text.strip() == ADMIN_PASSWORD:
         base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
         url = f"{base}/admin?key={ADMIN_PANEL_SECRET}"
         await message.answer(
@@ -288,7 +319,7 @@ async def process_admin_password(message: Message, state: FSMContext):
         await message.answer("❌ Noto‘g‘ri parol.")
     await state.clear()
 
-# ---------- PHOTO (QR + AI) ----------
+# ---------- PHOTO ----------
 @dp.message(F.photo)
 async def handle_photo(message: Message):
     user = message.from_user
@@ -298,7 +329,7 @@ async def handle_photo(message: Message):
     file = await bot.get_file(photo.file_id)
     data = (await bot.download_file(file.file_path)).read()
 
-    # 1. Avval mahalliy QR tekshiruv (tekin)
+    # 1. Mahalliy QR
     qr_data = detect_qr(data)
     if qr_data:
         lower = qr_data.lower()
@@ -307,12 +338,11 @@ async def handle_photo(message: Message):
         if is_danger:
             stats["photo_danger_count"] += 1
             update_user_rep(user.id, -10)
-            msg += "⚠️ **Ehtiyot bo‘ling!** Bu QR ichida havola yoki Wi-Fi ma’lumoti bor. Noma’lum manbadan kelgan QR-ni skanerlash xavfli."
+            msg += "⚠️ **Ehtiyot bo‘ling!** Bu QR ichida havola yoki Wi-Fi ma’lumoti bor."
             await notify_admin(f"🚨 QR aniqlandi\nUser: `{user.id}`\nData: `{qr_data[:150]}`")
         else:
-            msg += "✅ Oddiy QR ko‘rinadi, lekin baribir ehtiyot bo‘ling."
+            msg += "✅ Oddiy QR ko‘rinadi."
         await message.reply(msg, parse_mode="Markdown")
-        # QR topilgan bo‘lsa ham AI tahlilini davom ettiramiz
 
     # 2. Gemini tahlili
     prompt = (
@@ -326,7 +356,7 @@ async def handle_photo(message: Message):
         await message.reply(f"⚠️ Rasmni tahlil qilib bo‘lmadi.\n`{result}`")
         return
 
-    if "XAVFLI" in result.upper() or "DANGER" in result.upper() or "PHISHING" in result.upper():
+    if any(w in result.upper() for w in ("XAVFLI", "DANGER", "PHISHING", "SCAM")):
         stats["photo_danger_count"] += 1
         update_user_rep(user.id, -12)
         log_activity(user.id, "PHOTO_DANGER", "Rasm xavfli")
@@ -409,22 +439,24 @@ async def handle_document(message: Message):
         stats["file_danger_count"] += 1
         update_user_rep(user.id, -20)
         log_activity(user.id, "FILE_DANGER", name)
-        await message.reply(TEXTS['apk_danger'], parse_mode="Markdown")
+        await message.reply(TEXTS["apk_danger"], parse_mode="Markdown")
         await notify_admin(f"🚨 Xavfli fayl: `{name}`\nUser: `{user.id}`")
         return
 
-    await message.reply(f"📄 Fayl: `{doc.file_name}`\n⚠️ Noma’lum manbadan ochmang.", parse_mode="Markdown")
+    await message.reply(
+        f"📄 Fayl: `{doc.file_name}`\n⚠️ Noma’lum manbadan ochmang.",
+        parse_mode="Markdown"
+    )
 
-# ---------- TEXT (havolalar) ----------
+# ---------- TEXT ----------
 @dp.message(F.text)
 async def handle_text(message: Message):
-    # Admin parol kiritish holatida bo‘lsa, yuqoridagi state ishlaydi
     user = message.from_user
     add_user(user.id, user.username, user.full_name)
 
     now = time.time()
     if now - user_last_message_time.get(user.id, 0) < SPAM_INTERVAL:
-        await message.reply(TEXTS['spam'])
+        await message.reply(TEXTS["spam"])
         return
     user_last_message_time[user.id] = now
 
@@ -457,7 +489,7 @@ async def handle_text(message: Message):
         )
         result = await analyze_with_gemini(prompt, shot, "image/jpeg")
 
-        if "PHISHING" in result.upper() or "SCAM" in result.upper() or "XAVFLI" in result.upper():
+        if any(w in result.upper() for w in ("PHISHING", "SCAM", "XAVFLI", "DANGER")):
             stats["danger_count"] += 1
             update_user_rep(user.id, -15)
             log_activity(user.id, "PHISHING", domain)
@@ -486,6 +518,7 @@ class WebPanelHandler(BaseHTTPRequestHandler):
 
         if parsed.path in ("/", "/health"):
             self.send_response(200)
+            self.send_header("Content-type", "text/plain")
             self.end_headers()
             self.wfile.write(b"OK")
             return
@@ -507,27 +540,157 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             logs = c.fetchall()
             conn.close()
 
-            users_rows = "".join(f"<tr><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td></tr>" for u in users)
-            black_rows = "".join(f"<li>{b[0]}</li>" for b in black) or "<li>Bo‘sh</li>"
-            log_rows = "".join(f"<tr><td>{l[0]}</td><td>{l[1]}</td><td>{l[2][:60]}</td><td>{l[3]}</td></tr>" for l in logs)
+            users_rows = "".join(
+                f"<tr><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td></tr>"
+                for u in users
+            )
+            black_rows = "".join(f"<li>{b[0]}</li>" for b in black) or "<li>Bo'sh</li>"
+            log_rows = "".join(
+                f"<tr><td>{l[0]}</td><td>{l[1]}</td><td>{str(l[2])[:60]}</td><td>{l[3]}</td></tr>"
+                for l in logs
+            )
 
-            html = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Admin</title>
-            <style>body{{font-family:system-ui;background:#0f172a;color:#e2e8f0;padding:20px}}
-            .card{{background:#1e293b;padding:16px;margin:12px 0;border-radius:10px}}
-            table{{width:100%;border-collapse:collapse;font-size:13px}} th,td{{border:1px solid #334155;padding:6px}}
-            .stat{{display:inline-block;background:#0f172a;padding:10px 14px;margin:4px;border-radius:8px;text-align:center}}
-            input,textarea,button{{padding:8px;margin:4px 0;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#fff}}
-            button{{background:#0ea5e9;cursor:pointer}}</style></head><body>
-            <h1>🛡️ Kiber Admin Panel</h1>
-            <div class="card"><b>Statistika:</b><br>
-            <div class="stat">Havola<br>{stats['checked_count']}</div>
-            <div class="stat">Phishing<br>{stats['danger_count']}</div>
-            <div class="stat">Fayl<br>{stats['file_danger_count']}</div>
-            <div class="stat">Rasm<br>{stats['photo_danger_count']}</div>
-            <div class="stat">Ovoz<br>{stats['voice_danger_count']}</div>
-            <div class="stat">Video<br>{stats['video_danger_count']}</div>
-            <div class="stat">User<br>{len(users)}</div></div>
-            <div class="card"><h3>Broadcast</h3>
-            <form method="POST" action="/broadcast?key={ADMIN_PANEL_SECRET}">
-            <textarea name="message" rows="2" style="width:100%"></textarea><br>
-            <button>Yuborish</button></form></div>
+            html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin Panel</title>
+<style>
+body {{ font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 20px; }}
+.card {{ background: #1e293b; padding: 16px; margin: 12px 0; border-radius: 10px; }}
+.stat {{ display: inline-block; background: #0f172a; padding: 10px 14px; margin: 4px; border-radius: 8px; text-align: center; min-width: 80px; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+th, td {{ border: 1px solid #334155; padding: 6px; text-align: left; }}
+th {{ background: #0f172a; color: #94a3b8; }}
+input, textarea {{ width: 100%; padding: 8px; margin: 6px 0; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }}
+button {{ background: #0ea5e9; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; }}
+</style>
+</head>
+<body>
+<h1>🛡️ Kiber Admin Panel</h1>
+
+<div class="card">
+<b>Statistika</b><br>
+<div class="stat">Havola<br><b>{stats['checked_count']}</b></div>
+<div class="stat">Phishing<br><b>{stats['danger_count']}</b></div>
+<div class="stat">Fayl<br><b>{stats['file_danger_count']}</b></div>
+<div class="stat">Rasm<br><b>{stats['photo_danger_count']}</b></div>
+<div class="stat">Ovoz<br><b>{stats['voice_danger_count']}</b></div>
+<div class="stat">Video<br><b>{stats['video_danger_count']}</b></div>
+<div class="stat">User<br><b>{len(users)}</b></div>
+</div>
+
+<div class="card">
+<h3>📢 Broadcast</h3>
+<form method="POST" action="/broadcast?key={ADMIN_PANEL_SECRET}">
+<textarea name="message" rows="2" placeholder="E'lon matni..."></textarea>
+<button type="submit">Yuborish</button>
+</form>
+</div>
+
+<div class="card">
+<h3>🚫 Qora ro'yxat</h3>
+<form method="POST" action="/add_blacklist?key={ADMIN_PANEL_SECRET}">
+<input type="text" name="domain" placeholder="domen.uz">
+<button type="submit">Qo'shish</button>
+</form>
+<ul>{black_rows}</ul>
+</div>
+
+<div class="card">
+<h3>⚡ So'nggi loglar</h3>
+<table>
+<tr><th>User</th><th>Amal</th><th>Info</th><th>Vaqt</th></tr>
+{log_rows}
+</table>
+</div>
+
+<div class="card">
+<h3>👥 Foydalanuvchilar</h3>
+<table>
+<tr><th>ID</th><th>Username</th><th>Ism</th><th>Karma</th></tr>
+{users_rows}
+</table>
+</div>
+
+</body>
+</html>"""
+
+            self.send_response(200)
+            self.send_header("Content-type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        if query.get("key", [None])[0] != ADMIN_PANEL_SECRET:
+            self.send_response(403)
+            self.end_headers()
+            return
+
+        length = int(self.headers.get("Content-Length", 0))
+        params = parse_qs(self.rfile.read(length).decode())
+
+        if parsed.path == "/add_blacklist":
+            domain = params.get("domain", [""])[0].strip()
+            if domain:
+                add_global_blacklist(domain)
+                log_activity(ADMIN_ID, "BLACKLIST_ADD", domain)
+            self.send_response(303)
+            self.send_header("Location", f"/admin?key={ADMIN_PANEL_SECRET}")
+            self.end_headers()
+            return
+
+        if parsed.path == "/broadcast":
+            msg = params.get("message", [""])[0].strip()
+            if msg:
+                log_activity(ADMIN_ID, "BROADCAST", msg[:40])
+                threading.Thread(target=run_broadcast, args=(msg,), daemon=True).start()
+            self.send_response(303)
+            self.send_header("Location", f"/admin?key={ADMIN_PANEL_SECRET}")
+            self.end_headers()
+            return
+
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+def run_broadcast(text):
+    conn = sqlite3.connect("bot_database.db")
+    users = conn.execute("SELECT user_id FROM users").fetchall()
+    conn.close()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    async def send():
+        for u in users:
+            try:
+                await bot.send_message(u[0], f"📢 **Admin:**\n\n{text}", parse_mode="Markdown")
+                await asyncio.sleep(0.05)
+            except Exception:
+                pass
+
+    loop.run_until_complete(send())
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(("0.0.0.0", port), WebPanelHandler).serve_forever()
+
+# ==================== MAIN ====================
+async def main():
+    threading.Thread(target=run_http_server, daemon=True).start()
+    await bot.delete_webhook(drop_pending_updates=True)
+    await set_commands()
+    print("✅ Bot muvaffaqiyatli ishga tushdi")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
