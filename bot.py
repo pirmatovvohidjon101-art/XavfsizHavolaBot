@@ -146,7 +146,7 @@ TEXTS = {
         'safe_screenshot': "✅ Webpage screenshot checked. No dangerous signs found.",
         'report_btn': "🚨 Request to Blacklist",
         'weekly_tip': "🛡️ **Weekly Cyber Alert:**\n\nStay safe online! Do not click suspicious links.",
-        'help': "ℹ️ **Help:**\n- Send a link to check\n- `/audit <link>` — Cyber audit\n- `/lang` — Change language"
+        'help': "ℹ️️ **Help:**\n- Send a link to check\n- `/audit <link>` — Cyber audit\n- `/lang` — Change language"
     }
 }
 
@@ -164,8 +164,10 @@ user_last_time = {}
 SPAM_LIMIT = 1.5
 
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
-ADMIN_PANEL_PATH = f"/admin_{TOKEN}"  # Maxfiy admin panel yo'li
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
+ADMIN_PANEL_PATH = f"/admin_{TOKEN}" 
+RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL")
+if not RENDER_URL:
+    raise ValueError("RENDER_EXTERNAL_URL topilmadi! Render muhitida ushbu o'zgaruvchini qo'shishingiz shart.")
 WEBHOOK_URL = f"{RENDER_URL}{WEBHOOK_PATH}"
 
 class WebPanelHandler(BaseHTTPRequestHandler):
@@ -178,7 +180,6 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"Bot is running securely!")
             return
             
-        # Faqat maxfiy admin havolasi orqali ochiladi
         if parsed_path.path == ADMIN_PANEL_PATH:
             conn = sqlite3.connect(DB_NAME)
             cursor = conn.cursor()
@@ -334,7 +335,7 @@ async def cmd_audit(message: Message):
     target = args[1].strip()
     stats["audit_count"] += 1
     log_activity(user_id, "AUDIT", target)
-    await message.answer(f"🕵‍♂️️ Tahlil boshlandi: `{target}`", parse_mode="Markdown")
+    await message.answer(f"🕵‍♂ Tahlil boshlandi: `{target}`", parse_mode="Markdown")
     try:
         response = ai_client.models.generate_content(
             model='gemini-2.5-flash',
@@ -347,10 +348,8 @@ async def cmd_audit(message: Message):
 @dp.message(Command("web"))
 async def cmd_web(message: Message):
     if message.from_user.id != ADMIN_ID:
-        # Oddiy foydalanuvchilar uchun bu buyruq go'yo yo'qdek javob beriladi
         await message.answer("❌ Noma'lum buyruq. `/help` orqali yordam olishingiz mumkin.")
         return
-    # Faqat adminga maxfiy havola yuboriladi
     await message.answer(f"🌐 **Maxfiy Veb-panel:** [Ochish]({RENDER_URL}{ADMIN_PANEL_PATH})", parse_mode="Markdown")
 
 @dp.callback_query(F.data.startswith("req_black:"))
