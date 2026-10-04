@@ -28,7 +28,8 @@ if not TOKEN:
 
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008")
+# Kuchli parolni Render muhitidan (Environment Variables) o'qiymiz, bo'lmasa standart parol
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008_secure_pass")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 MODELS = [
@@ -40,6 +41,9 @@ MODELS = [
 
 user_last_message_time = {}
 SPAM_INTERVAL = 1.3
+
+# Sessiyalar uchun vaqtinchalik xotira (Oddiy xakerlar kirib ololmasligi uchun)
+ACTIVE_ADMIN_SESSIONS = set()
 
 # ==================== DATABASE ====================
 def init_db():
@@ -377,7 +381,6 @@ def detect_qr(image_bytes: bytes) -> str | None:
 
 async def check_community_blacklists(domain: str) -> bool:
     try:
-        # Bepul ochiq phishing manbalarini tekshirish (masalan, URLhaus / OpenPhish ochiq feedlari)
         res = requests.get(f"https://urlhaus.abuse.ch/api/v1/host/{domain}/", timeout=4)
         if res.status_code == 200:
             data = res.json()
@@ -636,7 +639,7 @@ async def cmd_panel(message: Message):
         return
     base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
     await message.answer(
-        f"🔐 **Admin Web Panel**\n\n`{base}/admin`\n\n[Panelni ochish]({base}/admin)",
+        f"🔐 **Himoyalangan Admin Panel**\n\nParol orqali kirish uchun quyidagi havoladan foydalaning:\n`{base}/admin`\n\n[Panelni ochish]({base}/admin)",
         parse_mode="Markdown", disable_web_page_preview=True
     )
 
@@ -824,7 +827,6 @@ async def handle_text(message: Message):
         await message.reply(t(user.id, "official"), reply_markup=kb)
         return
 
-    # Ochiq jamoat bazalaridan tekshirish
     is_community_danger = await check_community_blacklists(clean_url)
 
     if is_globally_blacklisted(clean_url) or is_community_danger:
@@ -880,7 +882,7 @@ async def handle_text(message: Message):
         else:
             await message.reply(t(user.id, "no_screenshot") + f"\n\n{analysis}", reply_markup=kb)
 
-# ==================== WEB SERVER & BROADCAST ====================
+# ==================== WEB SERVER & SECURITY ====================
 async def send_broadcast_message(text: str):
     conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
@@ -903,7 +905,35 @@ async def send_broadcast_message(text: str):
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/admin/broadcast":
+        if parsed.path == "/admin/login":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            params = parse_qs(post_data)
+            password = params.get("password", [""])[0]
+
+            if password == ADMIN_PASSWORD:
+                session_token = f"sess_{int(time.time())}_{os.urandom(4).hex()}"
+                ACTIVE_ADMIN_SESSIONS.add(session_token)
+                
+                self.send_response(303)
+                self.send_header("Location", "/admin")
+                self.send_header("Set-Cookie", f"admin_session={session_token}; Path=/; HttpOnly; SameSite=Lax")
+                self.end_headers()
+            else:
+                self.send_response(401)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"<h1>❌ Noto'g'ri parol!</h1><p><a href='/admin'>Qayta urinish</a></p>")
+
+        elif parsed.path == "/admin/broadcast":
+            # Cookie orqali sessiyani tekshiramiz (Xakerlar kirmasligi uchun)
+            cookie_header = self.headers.get("Cookie", "")
+            if not any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS):
+                self.send_response(403)
+                self.end_headers()
+                self.wfile.write(b"Forbidden: Ruxsat etilmagan!")
+                return
+
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length).decode('utf-8')
             params = parse_qs(post_data)
@@ -929,12 +959,48 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write("🤖 Bot ishlayapti! (AI Cyber-Security Bot 24/7)".encode("utf-8"))
+            self.wfile.write("🤖 Bot ishlayapti! (Secure AI Cyber-Security Bot 24/7)".encode("utf-8"))
         elif parsed.path == "/admin":
+            cookie_header = self.headers.get("Cookie", "")
+            is_authenticated = any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS)
+
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            
+
+            if not is_authenticated:
+                # Login формаси
+                login_html = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Admin Login - Cyber Bot</title>
+                    <meta charset="utf-8">
+                    <style>
+                        body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                        .login-card { background: #1e293b; padding: 30px; border-radius: 10px; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center; }
+                        input { width: 100%; padding: 10px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 5px; box-sizing: border-box; }
+                        button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; width: 100%; border-radius: 5px; cursor: pointer; }
+                        button:hover { background: #0ea5e9; }
+                        h2 { color: #38bdf8; margin-bottom: 10px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="login-card">
+                        <h2>🔐 Admin Panel</h2>
+                        <p style="font-size: 13px; color: #94a3b8;">Xavfsizlik uchun parolni kiriting</p>
+                        <form action="/admin/login" method="POST">
+                            <input type="password" name="password" placeholder="Parol..." required>
+                            <button type="submit">Kirish</button>
+                        </form>
+                    </div>
+                </body>
+                </html>
+                """
+                self.wfile.write(login_html.encode("utf-8"))
+                return
+
+            # Agar parol to'g'ri kiritilgan bo'lsa, haqiqiy panel ochiladi
             conn = sqlite3.connect("bot_database.db", check_same_thread=False)
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM users")
@@ -954,7 +1020,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Admin Panel - Cyber Bot</title>
+                <title>Secure Admin Panel - Cyber Bot</title>
                 <meta charset="utf-8">
                 <style>
                     body {{ font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }}
@@ -970,7 +1036,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                 </style>
             </head>
             <body>
-                <h1>🔐 Admin Panel & Boshqaruv</h1>
+                <h1>🔐 Himoyalangan Admin Panel</h1>
                 <div class="card">
                     <h2>📊 Umumiy Statistika</h2>
                     <div class="stat-box">Foydalanuvchilar: <b>{user_count}</b></div>
@@ -1037,7 +1103,7 @@ async def main():
     t.start()
     
     await set_commands()
-    logging.info("Bot ishga tushdi...")
+    logging.info("Xavfsiz Bot ishga tushdi...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
