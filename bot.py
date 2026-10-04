@@ -923,7 +923,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                 self.send_response(401)
                 self.send_header("Content-type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(b"<h1>❌ Noto'g'ri parol!</h1><p><a href='/admin'>Qayta urinish</a></p>")
+            self.wfile.write("<h1>❌ Noto'g'ri parol!</h1><a href='/admin'>Qayta urinish</a>".encode('utf-8'))
 
         elif parsed.path == "/admin/broadcast":
             # Cookie orqali sessiyani tekshiramiz (Xakerlar kirmasligi uchun)
