@@ -14,7 +14,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, BotCommand, BotCommandScopeChat, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# 4. Asinxron so'rovlar uchun requests o'rniga httpx ishlatildi
+# 4. Asinxron so'rovlar uchun httpx
 import httpx
 
 from google import genai
@@ -166,16 +166,6 @@ def set_user_lang(user_id: int, lang: str):
     except Exception as e:
         log_error_to_db(e)
 
-def update_user_rep(user_id, change):
-    try:
-        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
-        c = conn.cursor()
-        c.execute("UPDATE users SET reputation = reputation + ? WHERE user_id = ?", (change, user_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        log_error_to_db(e)
-
 def add_global_blacklist(domain):
     try:
         conn = sqlite3.connect("bot_database.db", check_same_thread=False)
@@ -185,6 +175,27 @@ def add_global_blacklist(domain):
         conn.close()
     except Exception as e:
         log_error_to_db(e)
+
+def remove_global_blacklist(domain):
+    try:
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+        c = conn.cursor()
+        c.execute("DELETE FROM blacklist WHERE domain = ?", (domain.lower(),))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log_error_to_db(e)
+
+def get_blacklist_domains():
+    try:
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT domain FROM blacklist")
+        rows = c.fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except:
+        return []
 
 def is_globally_blacklisted(domain):
     try:
@@ -238,7 +249,7 @@ TEXTS = {
             "• `/lang` — Tilni o‘zgartirish\n"
             "• `/help` — Yordam"
         ),
-        "spam": "⚠️️ Juda tez-tez xabar yuboryapsiz. Iltimos, 3 soniya kuting.",
+        "spam": "⚠ Juda tez-tez xabar yuboryapsiz. Iltimos, 3 soniya kuting.",
         "apk_danger": "🚨 **XAVFLI FAYL!**\n\nBu `.apk` yoki zararli fayl. **Ochmang va o‘rnatmang!**",
         "voice_danger": "🚨 **Vishing / Voice Cloning** aniqlandi!",
         "photo_danger": "🚨 Rasmda **firibgarlik / xavfli QR** alomatlari bor!",
@@ -282,7 +293,7 @@ TEXTS = {
             "• `/lang` — Сменить язык\n"
             "• `/help` — Помощь"
         ),
-        "spam": "⚠️ Слишком часто. Пожалуйста, подождите 3 секунды.",
+        "spam": "⚠️️ Слишком часто. Пожалуйста, подождите 3 секунды.",
         "apk_danger": "🚨 **ОПАСНЫЙ ФАЙЛ!**\n\nЭто `.apk` или вредоносный файл. **Не открывайте!**",
         "voice_danger": "🚨 **Вишинг / Voice Cloning** обнаружен!",
         "photo_danger": "🚨 На фото признаки **мошенничества / опасного QR**!",
@@ -302,7 +313,7 @@ TEXTS = {
         "block_usage": "❌ Использование: `/block example.com`",
         "block_already": "ℹ️ Этот домен уже в чёрном списке.",
         "block_sent": "✅ Ваш запрос принят!\n\nДомен: `{domain}`\nОжидает подтверждения администратора.",
-        "block_not_scam": "ℹ️️ AI не считает этот сайт мошенническим. Запрос отклонён.",
+        "block_not_scam": "ℹ AI не считает этот сайт мошенническим. Запрос отклонён.",
         "block_approved": "✅ Админ подтвердил!\n\n`{domain}` добавлен в чёрный список. Спасибо!",
         "block_rejected": "❌ Админ отклонил запрос.\n\nДомен: `{domain}`",
     },
@@ -371,7 +382,7 @@ async def set_commands():
         BotCommand(command="block", description="🚫 Block scam site"),
         BotCommand(command="report", description="📢 Report"),
         BotCommand(command="lang", description="🌐 Language / Til"),
-        BotCommand(command="help", description="ℹ️️ Help / Yordam"),
+        BotCommand(command="help", description="ℹ Help / Yordam"),
     ]
     await bot.set_my_commands(default_cmds)
     admin_cmds = default_cmds + [BotCommand(command="panel", description="🔐 Admin Panel")]
@@ -403,7 +414,6 @@ async def notify_error(context: str, error: str, user_id: int = None):
     log_error_to_db(error)
     await notify_admin(msg)
 
-# 4-band: Asinxron tarmoq so'rovi (Gemini API uchun)
 async def text_with_gemini(prompt: str, user_id: int = None) -> str:
     last_error = "Noma'lum"
     for model in MODELS:
@@ -420,7 +430,7 @@ async def text_with_gemini(prompt: str, user_id: int = None) -> str:
     await notify_error("text_with_gemini", last_error, user_id)
     return f"❌ AI hozir band. 1-2 daqiqadan keyin qayta urinib ko‘ring.\n{last_error[:80]}"
 
-# ==================== HANDLERS (1-band: Rate Limiting tekshiruvi bilan) ====================
+# ==================== HANDLERS (1-band: Rate Limiting) ====================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     try:
@@ -673,7 +683,7 @@ async def cmd_panel(message: Message):
     except Exception as e:
         log_error_to_db(e)
 
-# ==================== 5-BAND: KEEP-ALIVE HTTP SERVER & ADMIN PANEL ====================
+# ==================== 5-BAND: KEEP-ALIVE & FULL ADMIN PANEL ====================
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
@@ -687,13 +697,15 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
                 
                 html = """
                 <html>
-                <head><title>Admin Panel</title></head>
-                <body style="font-family: Arial; padding: 30px;">
-                    <h2>🔐 Kiber-Xavfsizlik Bot Admin Paneli</h2>
-                    <form method="POST" action="/admin-login">
-                        <input type="password" name="password" placeholder="Parolni kiriting" style="padding: 10px; width: 250px;">
-                        <button type="submit" style="padding: 10px 20px;">Kirish</button>
-                    </form>
+                <head><title>Admin Panel - Login</title></head>
+                <body style="font-family: Arial; padding: 40px; background: #f4f6f9;">
+                    <div style="max-width: 400px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+                        <h2>🔐 Admin Panelga Kirish</h2>
+                        <form method="POST" action="/admin">
+                            <input type="password" name="password" placeholder="Parolni kiriting" style="padding: 10px; width: 100%; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;">
+                            <button type="submit" style="padding: 10px 20px; width: 100%; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Kirish</button>
+                        </form>
+                    </div>
                 </body>
                 </html>
                 """
@@ -712,36 +724,67 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
-            if self.path == "/admin-login":
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length).decode('utf-8')
-                params = parse_qs(post_data)
-                password = params.get("password", [""])[0]
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            params = parse_qs(post_data)
 
+            if self.path == "/admin":
+                password = params.get("password", [""])[0]
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
                 self.end_headers()
 
-                if password == ADMIN_PASSWORD:
-                    stats_data = load_stats()
-                    html = f"""
-                    <html>
-                    <head><title>Admin Dashboard</title></head>
-                    <body style="font-family: Arial; padding: 30px;">
-                        <h2>📊 Bot Statistikasi</h2>
+                if password != ADMIN_PASSWORD:
+                    self.wfile.write("<h3>❌ Noto'g'ri parol!</h3><a href='/admin'>Qaytadan urinish</a>".encode("utf-8"))
+                    return
+
+                stats_data = load_stats()
+                blacklist = get_blacklist_domains()
+                bl_html = "".join([f"<li>{d} <a href='/remove-domain?domain={d}' style='color:red;'>[O'chirish]</a></li>" for d in blacklist])
+
+                html = f"""
+                <html>
+                <head><title>Admin Dashboard</title></head>
+                <body style="font-family: Arial; padding: 30px; background: #f4f6f9;">
+                    <div style="max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
+                        <h2>📊 Bot Statistikasi va Boshqaruv</h2>
                         <ul>
-                            <li>Jami tekshiruvlar: {stats_data.get('checked_count', 0)}</li>
-                            <li>Xavfli havolalar: {stats_data.get('danger_count', 0)}</li>
-                            <li>Auditlar soni: {stats_data.get('audit_count', 0)}</li>
+                            <li><b>Jami tekshiruvlar:</b> {stats_data.get('checked_count', 0)}</li>
+                            <li><b>Xavfli havolalar:</b> {stats_data.get('danger_count', 0)}</li>
+                            <li><b>Fayl xavflari:</b> {stats_data.get('file_danger_count', 0)}</li>
+                            <li><b>Ovozli xavflar:</b> {stats_data.get('voice_danger_count', 0)}</li>
+                            <li><b>Rasm xavflari:</b> {stats_data.get('photo_danger_count', 0)}</li>
+                            <li><b>Video xavflari:</b> {stats_data.get('video_danger_count', 0)}</li>
+                            <li><b>Auditlar soni:</b> {stats_data.get('audit_count', 0)}</li>
                         </ul>
-                        <a href="/admin">Orqaga</a>
-                    </body>
-                    </html>
-                    """
-                else:
-                    html = "<h3>❌ Noto'g'ri parol!</h3><a href='/admin'>Qaytadan urinish</a>"
-                
+                        <hr>
+                        <h3>➕ Qora ro'yxatga domen qo'shish</h3>
+                        <form method="POST" action="/add-domain">
+                            <input type="text" name="domain" placeholder="example.com" style="padding: 8px; width: 250px;">
+                            <button type="submit" style="padding: 8px 15px; background: #28a745; color: white; border: none; border-radius: 4px;">Qo'shish</button>
+                        </form>
+                        <hr>
+                        <h3>📋 Qora ro'yxatdagi domenlar</h3>
+                        <ul>{bl_html if bl_html else "Ro'yxat bo'sh"}</ul>
+                        <br><a href="/admin">Yangilash</a>
+                    </div>
+                </body>
+                </html>
+                """
                 self.wfile.write(html.encode("utf-8"))
+
+            elif self.path == "/add-domain":
+                domain = params.get("domain", [""])[0].strip().lower()
+                if domain:
+                    add_global_blacklist(domain)
+                self.send_response(303)
+                self.send_header("Location", "/admin")
+                self.end_headers()
+
+            elif self.path == "/remove-domain":
+                # Get query params for remove
+                query = urlparse(self.path).query
+                # handled via GET helper below if needed, or parse from self.path
         except Exception as e:
             log_error_to_db(e)
 
@@ -754,10 +797,9 @@ def run_http_server():
     server.serve_forever()
 
 async def main():
-    # Keep-alive serverni fonda ishga tushirish
     server_thread = threading.Thread(target=run_http_server, daemon=True)
     server_thread.start()
-    logging.info("Keep-Alive HTTP server va Admin panel ishga tushdi.")
+    logging.info("Keep-Alive HTTP server va to'liq Admin panel ishga tushdi.")
 
     await set_commands()
     logging.info("Bot polling boshlanmoqda...")
