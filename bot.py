@@ -32,7 +32,7 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 MODELS = [
-    "gemini-3.8-flash",      # Eng yangi va tavsiya etilgan
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
@@ -43,7 +43,7 @@ SPAM_INTERVAL = 1.3
 
 # ==================== DATABASE ====================
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
@@ -74,7 +74,7 @@ def init_db():
 init_db()
 
 def load_stats() -> dict:
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT key, value FROM stats")
     rows = c.fetchall()
@@ -82,7 +82,7 @@ def load_stats() -> dict:
     return {k: v for k, v in rows}
 
 def save_stat(key: str, increment: int = 1):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE stats SET value = value + ? WHERE key = ?", (increment, key))
     conn.commit()
@@ -90,7 +90,7 @@ def save_stat(key: str, increment: int = 1):
 
 def log_activity(user_id, action, details):
     try:
-        conn = sqlite3.connect("bot_database.db")
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
         c = conn.cursor()
         c.execute("INSERT INTO activity_logs (user_id, action, details) VALUES (?,?,?)",
                   (user_id, action, str(details)[:200]))
@@ -99,7 +99,7 @@ def log_activity(user_id, action, details):
     except: pass
 
 def add_user(user_id, username, full_name, language="uz"):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("""INSERT INTO users (user_id, username, full_name, language) VALUES (?,?,?,?)
                  ON CONFLICT(user_id) DO UPDATE SET 
@@ -109,7 +109,7 @@ def add_user(user_id, username, full_name, language="uz"):
     conn.close()
 
 def get_user_lang(user_id: int) -> str:
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT language FROM users WHERE user_id = ?", (user_id,))
     row = c.fetchone()
@@ -117,28 +117,28 @@ def get_user_lang(user_id: int) -> str:
     return row[0] if row else "uz"
 
 def set_user_lang(user_id: int, lang: str):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE users SET language = ? WHERE user_id = ?", (lang, user_id))
     conn.commit()
     conn.close()
 
 def update_user_rep(user_id, change):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE users SET reputation = reputation + ? WHERE user_id = ?", (change, user_id))
     conn.commit()
     conn.close()
 
 def add_global_blacklist(domain):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("INSERT OR IGNORE INTO blacklist (domain) VALUES (?)", (domain.lower(),))
     conn.commit()
     conn.close()
 
 def is_globally_blacklisted(domain):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT 1 FROM blacklist WHERE domain = ?", (domain.lower(),))
     row = c.fetchone()
@@ -146,7 +146,7 @@ def is_globally_blacklisted(domain):
     return bool(row)
 
 def add_pending_block(user_id: int, domain: str, reason: str) -> int:
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("INSERT INTO pending_blocks (user_id, domain, reason) VALUES (?,?,?)",
               (user_id, domain.lower(), reason[:300]))
@@ -156,7 +156,7 @@ def add_pending_block(user_id: int, domain: str, reason: str) -> int:
     return rid
 
 def update_pending_status(request_id: int, status: str):
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE pending_blocks SET status = ? WHERE id = ?", (status, request_id))
     conn.commit()
@@ -202,7 +202,7 @@ TEXTS = {
         "photo_ok": "✅ Rasm tekshirildi.\n\n{result}",
         "voice_ok": "✅ Ovoz xavfsiz.\n\n{result}",
         "video_ok": "✅ Video tekshirildi.\n\n{result}",
-        "file_ok": "📄 Fayl: `{name}`\n⚠️ Noma’lum manbadan ochmang.",
+        "file_ok": "📄 Fayl: `{name}`\n⚠️️ Noma’lum manbadan ochmang.",
         "audit_start": "🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`\n\nKuting...",
         "audit_result": "🛡️ **AUDIT HISOBOTI**\n\n{result}",
         "block_usage": "❌ Foydalanish: `/block example.com` yoki `/block https://scam-site.uz`",
@@ -254,7 +254,7 @@ TEXTS = {
         "block_usage": "❌ Использование: `/block example.com`",
         "block_already": "ℹ️ Этот домен уже в чёрном списке.",
         "block_sent": "✅ Ваш запрос принят!\n\nДомен: `{domain}`\nОжидает подтверждения администратора.",
-        "block_not_scam": "ℹ️️ AI не считает этот сайт мошенническим. Запрос отклонён.",
+        "block_not_scam": "ℹ AI не считает этот сайт мошенническим. Запрос отклонён.",
         "block_approved": "✅ Админ подтвердил!\n\n`{domain}` добавлен в чёрный список. Спасибо!",
         "block_rejected": "❌ Админ отклонил запрос.\n\nДомен: `{domain}`",
     },
@@ -289,7 +289,7 @@ TEXTS = {
         "official": "✅ Official and trusted address.",
         "blacklist": "🚨 This address is on the **blacklist**!",
         "no_screenshot": "🔗 Link received. Screenshot failed — be careful.",
-        "tg_profile": "🔗 **Telegram profile/channel:** `{clean}`\n\nScreenshot not available.\nDeep check: `/audit {clean}`",
+        "tg_profile": "🔗 **Telegram profile/kanal:** `{clean}`\n\nScreenshot not available.\nDeep check: `/audit {clean}`",
         "ai_busy": "❌ AI is currently busy. Try again in 1-2 minutes.",
         "photo_ok": "✅ Photo checked.\n\n{result}",
         "voice_ok": "✅ Voice is safe.\n\n{result}",
@@ -331,7 +331,7 @@ dp = Dispatcher(storage=storage)
 async def set_commands():
     default_cmds = [
         BotCommand(command="start", description="🚀 Start / Boshlash"),
-        BotCommand(command="audit", description="🕵️‍♂️️ Cyber Audit"),
+        BotCommand(command="audit", description="🕵️‍♂ Cyber Audit"),
         BotCommand(command="block", description="🚫 Block scam site"),
         BotCommand(command="report", description="📢 Report"),
         BotCommand(command="lang", description="🌐 Language / Til"),
@@ -519,7 +519,7 @@ async def approve_block(callback: CallbackQuery):
     
     request_id = int(callback.data.split("_")[-1])
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT user_id, domain, status FROM pending_blocks WHERE id = ?", (request_id,))
     row = c.fetchone()
@@ -552,7 +552,7 @@ async def reject_block(callback: CallbackQuery):
     
     request_id = int(callback.data.split("_")[-1])
     
-    conn = sqlite3.connect("bot_database.db")
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT user_id, domain, status FROM pending_blocks WHERE id = ?", (request_id,))
     row = c.fetchone()
@@ -589,7 +589,6 @@ async def cmd_audit(message: Message):
 
     wait_msg = await message.answer(t(message.from_user.id, "audit_start", target=target), parse_mode="Markdown")
     
-    # Foydalanuvchining tilini aniqlaymiz va AIga shu tilda javob yozishni buyuramiz
     user_lang = get_user_lang(message.from_user.id)
     lang_name = "Uzbek" if user_lang == "uz" else ("Russian" if user_lang == "ru" else "English")
 
@@ -854,8 +853,49 @@ async def handle_text(message: Message):
         else:
             await message.reply(t(user.id, "no_screenshot") + f"\n\n{analysis}")
 
-# ==================== WEB SERVER ====================
+# ==================== WEB SERVER & BROADCAST ====================
+async def send_broadcast_message(text: str):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users")
+    users = c.fetchall()
+    conn.close()
+
+    success = 0
+    failed = 0
+    for u in users:
+        uid = u[0]
+        try:
+            await bot.send_message(uid, text)
+            success += 1
+            await asyncio.sleep(0.05) # Telegram limitiga tushmaslik uchun
+        except:
+            failed += 1
+    await notify_admin(f"📢 **Xabar yuborish yakunlandi!**\n\n✅ Muvaffaqiyatli: {success}\n❌ Xato (bloklaganlar): {failed}")
+
 class SimpleHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path == "/admin/broadcast":
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            params = parse_qs(post_data)
+            msg_text = params.get("message", [""])[0]
+
+            if msg_text:
+                asyncio.run_coroutine_threadsafe(send_broadcast_message(msg_text), bot_loop)
+                self.send_response(200)
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write("<h1>✅ Xabar yuborish boshlandi!</h1><p><a href='/admin'>Orqaga qaytish</a></p>".encode("utf-8"))
+            else:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Xabar matni bosh bolishi mumkin emas!")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/" or parsed.path == "/health":
@@ -868,10 +908,12 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
             
-            conn = sqlite3.connect("bot_database.db")
+            conn = sqlite3.connect("bot_database.db", check_same_thread=False)
             c = conn.cursor()
             c.execute("SELECT COUNT(*) FROM users")
-            user_count = c.fetchone()[0]
+            user_row = c.fetchone()
+            user_count = user_row[0] if user_row else 0
+
             c.execute("SELECT domain FROM blacklist")
             blacklist_domains = [row[0] for row in c.fetchall()]
             c.execute("SELECT id, user_id, domain, reason, created_at FROM pending_blocks WHERE status='pending'")
@@ -891,7 +933,10 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
                     th, td {{ border: 1px solid #334155; padding: 10px; text-align: left; }}
                     th {{ background: #334155; }}
-                    .stat-box {{ display: inline-block; background: #334155; padding: 15px; border-radius: 8px; margin-right: 10px; }}
+                    .stat-box {{ display: inline-block; background: #334155; padding: 15px; border-radius: 8px; margin-right: 10px; margin-bottom: 10px; }}
+                    textarea {{ width: 100%; height: 100px; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; }}
+                    button {{ background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 10px; }}
+                    button:hover {{ background: #0ea5e9; }}
                 </style>
             </head>
             <body>
@@ -902,6 +947,13 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     <div class="stat-box">Tekshirilganlar: <b>{stats.get('checked_count', 0)}</b></div>
                     <div class="stat-box">Xavfli havolalar: <b>{stats.get('danger_count', 0)}</b></div>
                     <div class="stat-box">Zararli fayllar: <b>{stats.get('file_danger_count', 0)}</b></div>
+                </div>
+                <div class="card">
+                    <h2>📢 Barcha foydalanuvchilarga xabar yuborish (Broadcast)</h2>
+                    <form action="/admin/broadcast" method="POST">
+                        <textarea name="message" placeholder="Barcha foydalanuvchilarga yuboriladigan xabarni yozing..."></textarea><br>
+                        <button type="submit">Xabarni yuborish 🚀</button>
+                    </form>
                 </div>
                 <div class="card">
                     <h2>🚫 Tasdiqlashni kutayotgan domenlar ({len(pendings)})</h2>
@@ -935,7 +987,12 @@ def run_server():
     server.serve_forever()
 
 # ==================== MAIN ====================
+bot_loop = None
+
 async def main():
+    global bot_loop
+    bot_loop = asyncio.get_running_loop()
+
     t = threading.Thread(target=run_server, daemon=True)
     t.start()
     
