@@ -12,7 +12,8 @@ from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, BotCommand, BotCommandScopeChat, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
+from aiogram.types import Message, BotCommand, BotCommandScopeChat, BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ChatMemberUpdated
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from google import genai
@@ -66,10 +67,30 @@ def init_db():
         status TEXT DEFAULT 'pending',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )""")
+    # Guruhlar jadvali
+    c.execute("""CREATE TABLE IF NOT EXISTS groups (
+        chat_id INTEGER PRIMARY KEY,
+        title TEXT,
+        username TEXT,
+        chat_type TEXT,
+        members_count INTEGER DEFAULT 0,
+        added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        is_active INTEGER DEFAULT 1
+    )""")
+    # Xavfli havolalar jadvali
+    c.execute("""CREATE TABLE IF NOT EXISTS dangerous_urls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT,
+        domain TEXT,
+        user_id INTEGER,
+        reason TEXT,
+        source TEXT DEFAULT 'link',
+        detected_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""")
     default_stats = [
         ("checked_count", 0), ("danger_count", 0), ("file_danger_count", 0),
         ("voice_danger_count", 0), ("video_danger_count", 0), ("photo_danger_count", 0),
-        ("screenshot_count", 0), ("audit_count", 0),
+        ("screenshot_count", 0), ("audit_count", 0), ("groups_count", 0),
     ]
     c.executemany("INSERT OR IGNORE INTO stats (key, value) VALUES (?, ?)", default_stats)
     conn.commit()
@@ -165,6 +186,79 @@ def update_pending_status(request_id: int, status: str):
     c.execute("UPDATE pending_blocks SET status = ? WHERE id = ?", (status, request_id))
     conn.commit()
     conn.close()
+
+def add_or_update_group(chat_id: int, title: str, username: str = None, chat_type: str = "group", members_count: int = 0):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""INSERT INTO groups (chat_id, title, username, chat_type, members_count, is_active)
+                 VALUES (?,?,?,?,?,1)
+                 ON CONFLICT(chat_id) DO UPDATE SET
+                 title=excluded.title, username=excluded.username,
+                 chat_type=excluded.chat_type, members_count=excluded.members_count,
+                 is_active=1""",
+              (chat_id, (title or "Nomsiz")[:200], (username or "")[:100], chat_type, members_count or 0))
+    conn.commit()
+    # groups_count ni yangilash
+    c.execute("SELECT COUNT(*) FROM groups WHERE is_active=1")
+    count = c.fetchone()[0]
+    c.execute("INSERT OR REPLACE INTO stats (key, value) VALUES ('groups_count', ?)", (count,))
+    conn.commit()
+    conn.close()
+
+def deactivate_group(chat_id: int):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE groups SET is_active=0 WHERE chat_id=?", (chat_id,))
+    conn.commit()
+    c.execute("SELECT COUNT(*) FROM groups WHERE is_active=1")
+    count = c.fetchone()[0]
+    c.execute("INSERT OR REPLACE INTO stats (key, value) VALUES ('groups_count', ?)", (count,))
+    conn.commit()
+    conn.close()
+
+def add_dangerous_url(url: str, user_id: int, reason: str, source: str = "link"):
+    try:
+        domain = url.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+        conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+        c = conn.cursor()
+        c.execute("INSERT INTO dangerous_urls (url, domain, user_id, reason, source) VALUES (?,?,?,?,?)",
+                  (url[:500], domain[:200], user_id, (reason or "")[:400], source))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"add_dangerous_url xato: {e}")
+
+def get_groups_count() -> int:
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM groups WHERE is_active=1")
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def get_all_groups(limit: int = 200):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT chat_id, title, username, chat_type, members_count, added_at FROM groups WHERE is_active=1 ORDER BY added_at DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_users(limit: int = 500):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT user_id, username, full_name, language, reputation FROM users ORDER BY user_id DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_dangerous_urls(limit: int = 300):
+    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT id, url, domain, user_id, reason, source, detected_at FROM dangerous_urls ORDER BY detected_at DESC LIMIT ?", (limit,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
 
 stats = load_stats()
 
@@ -344,6 +438,49 @@ async def set_commands():
     await bot.set_my_commands(default_cmds)
     admin_cmds = default_cmds + [BotCommand(command="panel", description="🔐 Admin Panel")]
     await bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=ADMIN_ID))
+
+# ==================== GROUP TRACKING ====================
+@dp.my_chat_member(ChatMemberUpdatedFilter(IS_NOT_MEMBER >> IS_MEMBER))
+async def bot_added_to_group(event: ChatMemberUpdated):
+    """Bot guruh yoki kanalga qo'shilganda"""
+    chat = event.chat
+    if chat.type in ("group", "supergroup", "channel"):
+        try:
+            members = 0
+            try:
+                members = await bot.get_chat_member_count(chat.id)
+            except:
+                pass
+            add_or_update_group(
+                chat_id=chat.id,
+                title=chat.title or "Nomsiz guruh",
+                username=chat.username,
+                chat_type=chat.type,
+                members_count=members
+            )
+            log_activity(event.from_user.id if event.from_user else 0, "BOT_ADDED_TO_GROUP", f"{chat.id}|{chat.title}")
+            await notify_admin(
+                f"➕ **Bot yangi guruhga qo'shildi!**\n\n"
+                f"**Nomi:** `{chat.title}`\n"
+                f"**ID:** `{chat.id}`\n"
+                f"**Turi:** `{chat.type}`\n"
+                f"**Username:** @{chat.username or '-'}"
+            )
+        except Exception as e:
+            logging.error(f"bot_added_to_group xato: {e}")
+
+@dp.my_chat_member(ChatMemberUpdatedFilter(IS_MEMBER >> IS_NOT_MEMBER))
+async def bot_removed_from_group(event: ChatMemberUpdated):
+    """Bot guruhdan chiqarilganda"""
+    chat = event.chat
+    if chat.type in ("group", "supergroup", "channel"):
+        deactivate_group(chat.id)
+        log_activity(event.from_user.id if event.from_user else 0, "BOT_REMOVED_FROM_GROUP", f"{chat.id}|{chat.title}")
+        await notify_admin(
+            f"➖ **Bot guruhdan chiqarildi**\n\n"
+            f"**Nomi:** `{chat.title}`\n"
+            f"**ID:** `{chat.id}`"
+        )
 
 # ==================== HELPERS ====================
 def extract_url(text: str):
@@ -790,6 +927,24 @@ async def handle_document(message: Message):
 async def handle_text(message: Message):
     user = message.from_user
     add_user(user.id, user.username, user.full_name)
+
+    # Agar xabar guruhdan kelsa — guruhni bazaga yozib qo'yamiz
+    if message.chat.type in ("group", "supergroup", "channel"):
+        try:
+            members = 0
+            try:
+                members = await bot.get_chat_member_count(message.chat.id)
+            except:
+                pass
+            add_or_update_group(
+                chat_id=message.chat.id,
+                title=message.chat.title or "Nomsiz",
+                username=message.chat.username,
+                chat_type=message.chat.type,
+                members_count=members
+            )
+        except:
+            pass
     
     now = time.time()
     last_time = user_last_message_time.get(user.id, 0)
@@ -833,6 +988,7 @@ async def handle_text(message: Message):
         stats["danger_count"] = stats.get("danger_count", 0) + 1
         save_stat("danger_count")
         update_user_rep(user.id, -15)
+        add_dangerous_url(url, user.id, "Qora ro'yxat / Community blacklist", "blacklist")
         await message.reply(t(user.id, "blacklist") + f"\n\n🔗 `{url}`", parse_mode="Markdown", reply_markup=kb)
         await notify_admin(f"🚨 Qora ro'yxatdagi havola!\nUser: `{user.id}`\nUrl: `{url}`")
         return
@@ -861,6 +1017,7 @@ async def handle_text(message: Message):
             stats["danger_count"] = stats.get("danger_count", 0) + 1
             save_stat("danger_count")
             update_user_rep(user.id, -20)
+            add_dangerous_url(url, user.id, analysis[:300], "screenshot")
             await message.reply(f"🚨 **PHISHING / FIRIBGARlik ANIQLANDI!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown", reply_markup=kb)
             await notify_admin(f"🚨 Xavfli havola (Screenshot):\nUser: `{user.id}`\nUrl: `{url}`")
         else:
@@ -878,6 +1035,7 @@ async def handle_text(message: Message):
             stats["danger_count"] = stats.get("danger_count", 0) + 1
             save_stat("danger_count")
             update_user_rep(user.id, -15)
+            add_dangerous_url(url, user.id, analysis[:300], "text_ai")
             await message.reply(f"🚨 **XAVFLI BO'lishi mumkin!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown", reply_markup=kb)
         else:
             await message.reply(t(user.id, "no_screenshot") + f"\n\n{analysis}", reply_markup=kb)
@@ -953,136 +1111,281 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
+    def _is_authenticated(self):
+        cookie_header = self.headers.get("Cookie", "")
+        return any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS)
+
+    def _send_html(self, html: str, status: int = 200):
+        self.send_response(status)
+        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
+
+    def _common_css(self):
+        return """
+            body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; margin: 0; }
+            .card { background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+            h1, h2 { color: #38bdf8; }
+            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+            th, td { border: 1px solid #334155; padding: 10px; text-align: left; font-size: 14px; word-break: break-all; }
+            th { background: #334155; }
+            .stat-box { display: inline-block; background: #334155; padding: 15px 20px; border-radius: 8px; margin-right: 10px; margin-bottom: 10px; text-decoration: none; color: #f8fafc; transition: background 0.2s; }
+            .stat-box:hover { background: #475569; }
+            .stat-box b { color: #38bdf8; font-size: 1.2em; }
+            textarea { width: 100%; height: 100px; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; box-sizing: border-box; }
+            button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+            button:hover { background: #0ea5e9; }
+            a.back { color: #38bdf8; text-decoration: none; }
+            a.back:hover { text-decoration: underline; }
+            .nav { margin-bottom: 20px; }
+            .nav a { color: #94a3b8; margin-right: 15px; text-decoration: none; }
+            .nav a:hover { color: #38bdf8; }
+        """
+
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/" or parsed.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
-            self.wfile.write("🤖 Bot ishlayapti! (Secure AI Cyber-Security Bot 24/7)".encode("utf-8"))
-        elif parsed.path == "/admin":
-            cookie_header = self.headers.get("Cookie", "")
-            is_authenticated = any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS)
+        path = parsed.path
 
-            self.send_response(200)
-            self.send_header("Content-type", "text/html; charset=utf-8")
-            self.end_headers()
+        if path == "/" or path == "/health":
+            self._send_html("🤖 Bot ishlayapti! (Secure AI Cyber-Security Bot 24/7)")
+            return
 
-            if not is_authenticated:
-                # Login формаси
-                login_html = """
+        # Admin sahifalari
+        if path.startswith("/admin"):
+            if not self._is_authenticated() and path != "/admin":
+                # Login kerak
+                self.send_response(303)
+                self.send_header("Location", "/admin")
+                self.end_headers()
+                return
+
+            if path == "/admin":
+                if not self._is_authenticated():
+                    login_html = f"""
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <title>Admin Login - Cyber Bot</title>
+                        <meta charset="utf-8">
+                        <style>
+                            body {{ font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }}
+                            .login-card {{ background: #1e293b; padding: 30px; border-radius: 10px; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center; }}
+                            input {{ width: 100%; padding: 10px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 5px; box-sizing: border-box; }}
+                            button {{ background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; width: 100%; border-radius: 5px; cursor: pointer; }}
+                            button:hover {{ background: #0ea5e9; }}
+                            h2 {{ color: #38bdf8; margin-bottom: 10px; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="login-card">
+                            <h2>🔐 Admin Panel</h2>
+                            <p style="font-size: 13px; color: #94a3b8;">Xavfsizlik uchun parolni kiriting</p>
+                            <form action="/admin/login" method="POST">
+                                <input type="password" name="password" placeholder="Parol..." required>
+                                <button type="submit">Kirish</button>
+                            </form>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    self._send_html(login_html)
+                    return
+
+                # Asosiy admin panel
+                current_stats = load_stats()
+                user_count = 0
+                groups_count = get_groups_count()
+                conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+                c = conn.cursor()
+                c.execute("SELECT COUNT(*) FROM users")
+                user_row = c.fetchone()
+                user_count = user_row[0] if user_row else 0
+                c.execute("SELECT domain FROM blacklist")
+                blacklist_domains = [row[0] for row in c.fetchall()]
+                c.execute("SELECT id, user_id, domain, reason, created_at FROM pending_blocks WHERE status='pending'")
+                pendings = c.fetchall()
+                c.execute("SELECT COUNT(*) FROM dangerous_urls")
+                danger_urls_count = c.fetchone()[0] or 0
+                conn.close()
+
+                html = f"""
                 <!DOCTYPE html>
                 <html>
                 <head>
-                    <title>Admin Login - Cyber Bot</title>
+                    <title>Secure Admin Panel - Cyber Bot</title>
                     <meta charset="utf-8">
-                    <style>
-                        body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-                        .login-card { background: #1e293b; padding: 30px; border-radius: 10px; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center; }
-                        input { width: 100%; padding: 10px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 5px; box-sizing: border-box; }
-                        button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; width: 100%; border-radius: 5px; cursor: pointer; }
-                        button:hover { background: #0ea5e9; }
-                        h2 { color: #38bdf8; margin-bottom: 10px; }
-                    </style>
+                    <style>{self._common_css()}</style>
                 </head>
                 <body>
-                    <div class="login-card">
-                        <h2>🔐 Admin Panel</h2>
-                        <p style="font-size: 13px; color: #94a3b8;">Xavfsizlik uchun parolni kiriting</p>
-                        <form action="/admin/login" method="POST">
-                            <input type="password" name="password" placeholder="Parol..." required>
-                            <button type="submit">Kirish</button>
+                    <h1>🔐 Himoyalangan Admin Panel</h1>
+                    <div class="nav">
+                        <a href="/admin">Asosiy</a>
+                        <a href="/admin/users">Foydalanuvchilar</a>
+                        <a href="/admin/groups">Guruhlar</a>
+                        <a href="/admin/dangers">Xavfli havolalar</a>
+                    </div>
+
+                    <div class="card">
+                        <h2>📊 Bot Statistikasi</h2>
+                        <a href="/admin/users" class="stat-box">👥 Foydalanuvchilar<br><b>{user_count}</b></a>
+                        <a href="/admin/groups" class="stat-box">🏘 Guruhlar<br><b>{groups_count}</b></a>
+                        <div class="stat-box">🔍 Tekshirilganlar<br><b>{current_stats.get('checked_count', 0)}</b></div>
+                        <a href="/admin/dangers" class="stat-box">🚨 Xavfli havolalar<br><b>{current_stats.get('danger_count', 0)}</b> <small>({danger_urls_count} saqlangan)</small></a>
+                        <div class="stat-box">📄 Zararli fayllar<br><b>{current_stats.get('file_danger_count', 0)}</b></div>
+                        <div class="stat-box">🎤 Ovoz xavfi<br><b>{current_stats.get('voice_danger_count', 0)}</b></div>
+                        <div class="stat-box">🎬 Video xavfi<br><b>{current_stats.get('video_danger_count', 0)}</b></div>
+                        <div class="stat-box">🖼 Rasm xavfi<br><b>{current_stats.get('photo_danger_count', 0)}</b></div>
+                        <div class="stat-box">📸 Skrinshotlar<br><b>{current_stats.get('screenshot_count', 0)}</b></div>
+                        <div class="stat-box">🕵️ Auditlar<br><b>{current_stats.get('audit_count', 0)}</b></div>
+                    </div>
+
+                    <div class="card">
+                        <h2>📢 Barcha foydalanuvchilarga xabar yuborish (Broadcast)</h2>
+                        <form action="/admin/broadcast" method="POST">
+                            <textarea name="message" placeholder="Barcha foydalanuvchilarga yuboriladigan xabarni yozing..." required></textarea><br>
+                            <button type="submit">Xabarni yuborish 🚀</button>
                         </form>
+                    </div>
+
+                    <div class="card">
+                        <h2>🚫 Tasdiqlashni kutayotgan domenlar ({len(pendings)})</h2>
+                        <table>
+                            <tr><th>ID</th><th>User ID</th><th>Domen</th><th>Sabab</th><th>Vaqt</th></tr>
+                """
+                for p in pendings:
+                    html += f"<tr><td>{p[0]}</td><td>{p[1]}</td><td><b>{p[2]}</b></td><td>{(p[3] or '')[:80]}</td><td>{p[4]}</td></tr>"
+                html += f"""
+                        </table>
+                    </div>
+
+                    <div class="card">
+                        <h2>🛡️ Qora ro'yxatdagi domenlar ({len(blacklist_domains)})</h2>
+                        <p>{', '.join(blacklist_domains) if blacklist_domains else "Hozircha bo'sh"}</p>
                     </div>
                 </body>
                 </html>
                 """
-                self.wfile.write(login_html.encode("utf-8"))
+                self._send_html(html)
                 return
 
-            # Agar parol to'g'ri kiritilgan bo'lsa, haqiqiy panel ochiladi
-            conn = sqlite3.connect("bot_database.db", check_same_thread=False)
-            c = conn.cursor()
-            c.execute("SELECT COUNT(*) FROM users")
-            user_row = c.fetchone()
-            user_count = user_row[0] if user_row else 0
+            # /admin/users — barcha foydalanuvchilar
+            if path == "/admin/users":
+                users = get_all_users(limit=1000)
+                html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Foydalanuvchilar - Admin</title>
+                    <meta charset="utf-8">
+                    <style>{self._common_css()}</style>
+                </head>
+                <body>
+                    <div class="nav">
+                        <a href="/admin" class="back">← Orqaga</a>
+                        <a href="/admin/users">Foydalanuvchilar</a>
+                        <a href="/admin/groups">Guruhlar</a>
+                        <a href="/admin/dangers">Xavfli havolalar</a>
+                    </div>
+                    <h1>👥 Barcha foydalanuvchilar ({len(users)})</h1>
+                    <div class="card">
+                        <table>
+                            <tr><th>#</th><th>User ID</th><th>Username</th><th>Ismi</th><th>Til</th><th>Reyting</th></tr>
+                """
+                for i, u in enumerate(users, 1):
+                    html += f"<tr><td>{i}</td><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td><td><b>{u[4]}</b></td></tr>"
+                html += """
+                        </table>
+                    </div>
+                </body>
+                </html>
+                """
+                self._send_html(html)
+                return
 
-            c.execute("SELECT user_id, username, full_name, language, reputation FROM users ORDER BY user_id DESC LIMIT 50")
-            all_users = c.fetchall()
+            # /admin/groups — barcha guruhlar
+            if path == "/admin/groups":
+                groups = get_all_groups(limit=500)
+                html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Guruhlar - Admin</title>
+                    <meta charset="utf-8">
+                    <style>{self._common_css()}</style>
+                </head>
+                <body>
+                    <div class="nav">
+                        <a href="/admin" class="back">← Orqaga</a>
+                        <a href="/admin/users">Foydalanuvchilar</a>
+                        <a href="/admin/groups">Guruhlar</a>
+                        <a href="/admin/dangers">Xavfli havolalar</a>
+                    </div>
+                    <h1>🏘 Bot qo'shilgan guruhlar ({len(groups)})</h1>
+                    <div class="card">
+                        <table>
+                            <tr><th>#</th><th>Chat ID</th><th>Nomi</th><th>Username</th><th>Turi</th><th>A'zolar</th><th>Qo'shilgan vaqt</th></tr>
+                """
+                for i, g in enumerate(groups, 1):
+                    uname = f"@{g[2]}" if g[2] else "-"
+                    html += f"<tr><td>{i}</td><td>{g[0]}</td><td><b>{g[1]}</b></td><td>{uname}</td><td>{g[3]}</td><td>{g[4]}</td><td>{g[5]}</td></tr>"
+                if not groups:
+                    html += "<tr><td colspan='7'>Hozircha guruhlar yo'q. Bot guruhga qo'shilganda avtomatik yoziladi.</td></tr>"
+                html += """
+                        </table>
+                    </div>
+                </body>
+                </html>
+                """
+                self._send_html(html)
+                return
 
-            c.execute("SELECT domain FROM blacklist")
-            blacklist_domains = [row[0] for row in c.fetchall()]
-            c.execute("SELECT id, user_id, domain, reason, created_at FROM pending_blocks WHERE status='pending'")
-            pendings = c.fetchall()
-            conn.close()
+            # /admin/dangers — xavfli havolalar ro'yxati
+            if path == "/admin/dangers":
+                dangers = get_dangerous_urls(limit=500)
+                html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Xavfli havolalar - Admin</title>
+                    <meta charset="utf-8">
+                    <style>{self._common_css()}</style>
+                </head>
+                <body>
+                    <div class="nav">
+                        <a href="/admin" class="back">← Orqaga</a>
+                        <a href="/admin/users">Foydalanuvchilar</a>
+                        <a href="/admin/groups">Guruhlar</a>
+                        <a href="/admin/dangers">Xavfli havolalar</a>
+                    </div>
+                    <h1>🚨 Xavfli deb topilgan havolalar ({len(dangers)})</h1>
+                    <div class="card">
+                        <table>
+                            <tr><th>#</th><th>URL</th><th>Domen</th><th>User ID</th><th>Manba</th><th>Sabab</th><th>Vaqt</th></tr>
+                """
+                for i, d in enumerate(dangers, 1):
+                    reason_short = (d[4] or "")[:100]
+                    html += f"<tr><td>{i}</td><td>{d[1]}</td><td><b>{d[2]}</b></td><td>{d[3]}</td><td>{d[5]}</td><td>{reason_short}</td><td>{d[6]}</td></tr>"
+                if not dangers:
+                    html += "<tr><td colspan='7'>Hozircha xavfli havolalar saqlanmagan. Yangi xavfli havolalar avtomatik yoziladi.</td></tr>"
+                html += """
+                        </table>
+                    </div>
+                </body>
+                </html>
+                """
+                self._send_html(html)
+                return
 
-            html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Secure Admin Panel - Cyber Bot</title>
-                <meta charset="utf-8">
-                <style>
-                    body {{ font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; }}
-                    .card {{ background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
-                    h1, h2 {{ color: #38bdf8; }}
-                    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-                    th, td {{ border: 1px solid #334155; padding: 10px; text-align: left; font-size: 14px; }}
-                    th {{ background: #334155; }}
-                    .stat-box {{ display: inline-block; background: #334155; padding: 15px; border-radius: 8px; margin-right: 10px; margin-bottom: 10px; }}
-                    textarea {{ width: 100%; height: 100px; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; }}
-                    button {{ background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 10px; }}
-                    button:hover {{ background: #0ea5e9; }}
-                </style>
-            </head>
-            <body>
-                <h1>🔐 Himoyalangan Admin Panel</h1>
-                <div class="card">
-                    <h2>📊 Umumiy Statistika</h2>
-                    <div class="stat-box">Foydalanuvchilar: <b>{user_count}</b></div>
-                    <div class="stat-box">Tekshirilganlar: <b>{stats.get('checked_count', 0)}</b></div>
-                    <div class="stat-box">Xavfli havolalar: <b>{stats.get('danger_count', 0)}</b></div>
-                    <div class="stat-box">Zararli fayllar: <b>{stats.get('file_danger_count', 0)}</b></div>
-                </div>
-                <div class="card">
-                    <h2>📢 Barcha foydalanuvchilarga xabar yuborish (Broadcast)</h2>
-                    <form action="/admin/broadcast" method="POST">
-                        <textarea name="message" placeholder="Barcha foydalanuvchilarga yuboriladigan xabarni yozing..."></textarea><br>
-                        <button type="submit">Xabarni yuborish 🚀</button>
-                    </form>
-                </div>
-                <div class="card">
-                    <h2>🚫 Tasdiqlashni kutayotgan domenlar ({len(pendings)})</h2>
-                    <table>
-                        <tr><th>ID</th><th>User ID</th><th>Domen</th><th>Sabab</th><th>Vaqt</th></tr>
-            """
-            for p in pendings:
-                html += f"<tr><td>{p[0]}</td><td>{p[1]}</td><td><b>{p[2]}</b></td><td>{p[3]}</td><td>{p[4]}</td></tr>"
-            html += f"""
-                    </table>
-                </div>
-                <div class="card">
-                    <h2>👥 So'nggi foydalanuvchilar ro'yxati (Oxirgi 50 ta)</h2>
-                    <table>
-                        <tr><th>User ID</th><th>Username</th><th>Ismi</th><th>Til</th><th>Reyting</th></tr>
-            """
-            for u in all_users:
-                html += f"<tr><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td><td><b>{u[4]}</b></td></tr>"
-            html += f"""
-                    </table>
-                </div>
-                <div class="card">
-                    <h2>🛡️ Qora ro'yxatdagi domenlar ({len(blacklist_domains)})</h2>
-                    <p>{', '.join(blacklist_domains) if blacklist_domains else 'Hozircha bo\'sh'}</p>
-                </div>
-            </body>
-            </html>
-            """
-            self.wfile.write(html.encode("utf-8"))
-        else:
+            # Noma'lum /admin/... 
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not Found")
+            return
+
+        # Boshqa pathlar
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b"Not Found")
 
     def log_message(self, format, *args):
         pass
@@ -1104,7 +1407,7 @@ async def main():
     
     await set_commands()
     logging.info("Xavfsiz Bot ishga tushdi...")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"])
 
 if __name__ == "__main__":
     stats = load_stats()
