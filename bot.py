@@ -202,7 +202,7 @@ TEXTS = {
         "photo_ok": "✅ Rasm tekshirildi.\n\n{result}",
         "voice_ok": "✅ Ovoz xavfsiz.\n\n{result}",
         "video_ok": "✅ Video tekshirildi.\n\n{result}",
-        "file_ok": "📄 Fayl: `{name}`\n⚠️️ Noma’lum manbadan ochmang.",
+        "file_ok": "📄 Fayl: `{name}`\n⚠ Noma’lum manbadan ochmang.",
         "audit_start": "🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`\n\nKuting...",
         "audit_result": "🛡️ **AUDIT HISOBOTI**\n\n{result}",
         "block_usage": "❌ Foydalanish: `/block example.com` yoki `/block https://scam-site.uz`",
@@ -375,6 +375,17 @@ def detect_qr(image_bytes: bytes) -> str | None:
         return data if data else None
     except: return None
 
+async def check_community_blacklists(domain: str) -> bool:
+    try:
+        # Bepul ochiq phishing manbalarini tekshirish (masalan, URLhaus / OpenPhish ochiq feedlari)
+        res = requests.get(f"https://urlhaus.abuse.ch/api/v1/host/{domain}/", timeout=4)
+        if res.status_code == 200:
+            data = res.json()
+            if data.get("query_status") == "ok":
+                return True
+    except: pass
+    return False
+
 async def notify_admin(text: str, reply_markup=None):
     try:
         await bot.send_message(ADMIN_ID, text, parse_mode="Markdown", reply_markup=reply_markup)
@@ -455,6 +466,11 @@ async def process_lang(callback: CallbackQuery):
     await callback.message.edit_text(t(callback.from_user.id, "lang_set"))
     await callback.answer()
 
+@dp.callback_query(F.data == "quick_report")
+async def process_quick_report(callback: CallbackQuery):
+    await callback.message.answer("📢 Shikoyatingiz qabul qilindi. Admin tez orada ko‘rib chiqadi. Rahmat!")
+    await callback.answer("Yuborildi!")
+
 @dp.message(Command("block"))
 async def cmd_block(message: Message):
     args = message.text.split(maxsplit=1)
@@ -497,8 +513,8 @@ async def cmd_block(message: Message):
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Tasdiqlash / Approve", callback_data=f"approve_block_{request_id}"),
-            InlineKeyboardButton(text="❌ Rad etish / Reject", callback_data=f"reject_block_{request_id}")
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_block_{request_id}"),
+            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_block_{request_id}")
         ]
     ])
     
@@ -603,6 +619,8 @@ async def cmd_audit(message: Message):
     try: await wait_msg.delete()
     except: pass
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish / Report", callback_data="quick_report")]])
+
     if result.startswith("ERROR") or result.startswith("❌"):
         await message.answer(result)
     else:
@@ -610,7 +628,7 @@ async def cmd_audit(message: Message):
             for i in range(0, len(result), 4000):
                 await message.answer(result[i:i+4000])
         else:
-            await message.answer(t(message.from_user.id, "audit_result", result=result), parse_mode="Markdown")
+            await message.answer(t(message.from_user.id, "audit_result", result=result), parse_mode="Markdown", reply_markup=kb)
 
 @dp.message(Command("panel"))
 async def cmd_panel(message: Message):
@@ -653,15 +671,16 @@ async def handle_photo(message: Message):
         if result.startswith("ERROR"):
             await message.reply(f"⚠️ {result}")
             return
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish", callback_data="quick_report")]])
         if any(w in result.upper() for w in ("XAVFLI", "DANGER", "PHISHING", "SCAM")):
             stats["photo_danger_count"] = stats.get("photo_danger_count", 0) + 1
             save_stat("photo_danger_count")
             update_user_rep(user.id, -12)
-            await message.reply(t(user.id, "photo_danger") + f"\n\n{result}")
+            await message.reply(t(user.id, "photo_danger") + f"\n\n{result}", reply_markup=kb)
             await notify_admin(f"🚨 Rasm\nUser: `{user.id}`")
         else:
             update_user_rep(user.id, +2)
-            await message.reply(t(user.id, "photo_ok", result=result))
+            await message.reply(t(user.id, "photo_ok", result=result), reply_markup=kb)
     except Exception as e:
         await notify_error("handle_photo", str(e), user.id)
         await message.reply("⚠️ Rasm tahlilida xato.")
@@ -679,15 +698,16 @@ async def handle_voice(message: Message):
         if result.startswith("ERROR"):
             await message.reply(f"⚠️ {result}")
             return
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish", callback_data="quick_report")]])
         if "DANGER" in result.upper():
             stats["voice_danger_count"] = stats.get("voice_danger_count", 0) + 1
             save_stat("voice_danger_count")
             update_user_rep(user.id, -15)
-            await message.reply(t(user.id, "voice_danger") + f"\n\n{result}")
+            await message.reply(t(user.id, "voice_danger") + f"\n\n{result}", reply_markup=kb)
             await notify_admin(f"🚨 Vishing\nUser: `{user.id}`")
         else:
             update_user_rep(user.id, +2)
-            await message.reply(t(user.id, "voice_ok", result=result))
+            await message.reply(t(user.id, "voice_ok", result=result), reply_markup=kb)
     except Exception as e:
         await notify_error("handle_voice", str(e), user.id)
         await message.reply("⚠️ Ovoz tahlilida xato.")
@@ -708,15 +728,16 @@ async def handle_video(message: Message):
         if result.startswith("ERROR"):
             await message.reply(f"⚠️ {result}")
             return
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish", callback_data="quick_report")]])
         if "DANGER" in result.upper():
             stats["video_danger_count"] = stats.get("video_danger_count", 0) + 1
             save_stat("video_danger_count")
             update_user_rep(user.id, -15)
-            await message.reply(t(user.id, "video_danger") + f"\n\n{result}")
+            await message.reply(t(user.id, "video_danger") + f"\n\n{result}", reply_markup=kb)
             await notify_admin(f"🚨 Video\nUser: `{user.id}`")
         else:
             update_user_rep(user.id, +2)
-            await message.reply(t(user.id, "video_ok", result=result))
+            await message.reply(t(user.id, "video_ok", result=result), reply_markup=kb)
     except Exception as e:
         await notify_error("handle_video", str(e), user.id)
         await message.reply("⚠️ Video tahlilida xato.")
@@ -730,11 +751,12 @@ async def handle_document(message: Message):
     if (doc.file_size or 0) > 25*1024*1024:
         await message.reply("⚠️ Fayl juda katta.")
         return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish", callback_data="quick_report")]])
     if any(name.endswith(ext) for ext in DANGEROUS_EXTENSIONS):
         stats["file_danger_count"] = stats.get("file_danger_count", 0) + 1
         save_stat("file_danger_count")
         update_user_rep(user.id, -20)
-        await message.reply(t(user.id, "apk_danger"), parse_mode="Markdown")
+        await message.reply(t(user.id, "apk_danger"), parse_mode="Markdown", reply_markup=kb)
         await notify_admin(f"🚨 Fayl: `{name}`\nUser: `{user.id}`")
         return
 
@@ -752,11 +774,11 @@ async def handle_document(message: Message):
             stats["file_danger_count"] = stats.get("file_danger_count", 0) + 1
             save_stat("file_danger_count")
             update_user_rep(user.id, -20)
-            await message.reply(f"🚨 **ZARARLI FAYL ANIQLANDI!**\n\n{result}", parse_mode="Markdown")
+            await message.reply(f"🚨 **ZARARLI FAYL ANIQLANDI!**\n\n{result}", parse_mode="Markdown", reply_markup=kb)
             await notify_admin(f"🚨 Zararli fayl: `{doc.file_name}`\nUser: `{user.id}`")
         else:
             update_user_rep(user.id, +2)
-            await message.reply(t(user.id, "file_ok", name=doc.file_name) + f"\n\n{result}")
+            await message.reply(t(user.id, "file_ok", name=doc.file_name) + f"\n\n{result}", reply_markup=kb)
     except Exception as e:
         await notify_error("handle_document", str(e), user.id)
         await message.reply("⚠️ Fayl tahlilida xato.")
@@ -795,21 +817,26 @@ async def handle_text(message: Message):
 
     clean_url = url.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
 
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish / Report", callback_data="quick_report")]])
+
     if clean_url in OFFICIAL_DOMAINS or any(clean_url.endswith("." + d) for d in OFFICIAL_DOMAINS):
         update_user_rep(user.id, +1)
-        await message.reply(t(user.id, "official"))
+        await message.reply(t(user.id, "official"), reply_markup=kb)
         return
 
-    if is_globally_blacklisted(clean_url):
+    # Ochiq jamoat bazalaridan tekshirish
+    is_community_danger = await check_community_blacklists(clean_url)
+
+    if is_globally_blacklisted(clean_url) or is_community_danger:
         stats["danger_count"] = stats.get("danger_count", 0) + 1
         save_stat("danger_count")
         update_user_rep(user.id, -15)
-        await message.reply(t(user.id, "blacklist") + f"\n\n🔗 `{url}`", parse_mode="Markdown")
+        await message.reply(t(user.id, "blacklist") + f"\n\n🔗 `{url}`", parse_mode="Markdown", reply_markup=kb)
         await notify_admin(f"🚨 Qora ro'yxatdagi havola!\nUser: `{user.id}`\nUrl: `{url}`")
         return
 
     if "t.me/" in url.lower() or "telegram.me/" in url.lower() or url.startswith("@"):
-        await message.reply(t(user.id, "tg_profile", clean=clean_url), parse_mode="Markdown")
+        await message.reply(t(user.id, "tg_profile", clean=clean_url), parse_mode="Markdown", reply_markup=kb)
         return
 
     wait_msg = await message.reply("🔍 Havola tekshirilmoqda...")
@@ -832,11 +859,11 @@ async def handle_text(message: Message):
             stats["danger_count"] = stats.get("danger_count", 0) + 1
             save_stat("danger_count")
             update_user_rep(user.id, -20)
-            await message.reply(f"🚨 **PHISHING / FIRIBGARlik ANIQLANDI!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown")
+            await message.reply(f"🚨 **PHISHING / FIRIBGARlik ANIQLANDI!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown", reply_markup=kb)
             await notify_admin(f"🚨 Xavfli havola (Screenshot):\nUser: `{user.id}`\nUrl: `{url}`")
         else:
             update_user_rep(user.id, +2)
-            await message.reply(f"✅ **Xavfsiz ko'rinadi**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown")
+            await message.reply(f"✅ **Xavfsiz ko'rinadi**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown", reply_markup=kb)
     else:
         try: await wait_msg.delete()
         except: pass
@@ -849,9 +876,9 @@ async def handle_text(message: Message):
             stats["danger_count"] = stats.get("danger_count", 0) + 1
             save_stat("danger_count")
             update_user_rep(user.id, -15)
-            await message.reply(f"🚨 **XAVFLI BO'lishi mumkin!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown")
+            await message.reply(f"🚨 **XAVFLI BO'lishi mumkin!**\n\n🔗 `{url}`\n\n{analysis}", parse_mode="Markdown", reply_markup=kb)
         else:
-            await message.reply(t(user.id, "no_screenshot") + f"\n\n{analysis}")
+            await message.reply(t(user.id, "no_screenshot") + f"\n\n{analysis}", reply_markup=kb)
 
 # ==================== WEB SERVER & BROADCAST ====================
 async def send_broadcast_message(text: str):
@@ -868,7 +895,7 @@ async def send_broadcast_message(text: str):
         try:
             await bot.send_message(uid, text)
             success += 1
-            await asyncio.sleep(0.05) # Telegram limitiga tushmaslik uchun
+            await asyncio.sleep(0.05)
         except:
             failed += 1
     await notify_admin(f"📢 **Xabar yuborish yakunlandi!**\n\n✅ Muvaffaqiyatli: {success}\n❌ Xato (bloklaganlar): {failed}")
@@ -902,7 +929,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write("🤖 Bot ishlayapti! (AI Cyber-Security Bot)".encode("utf-8"))
+            self.wfile.write("🤖 Bot ishlayapti! (AI Cyber-Security Bot 24/7)".encode("utf-8"))
         elif parsed.path == "/admin":
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
@@ -913,6 +940,9 @@ class SimpleHandler(BaseHTTPRequestHandler):
             c.execute("SELECT COUNT(*) FROM users")
             user_row = c.fetchone()
             user_count = user_row[0] if user_row else 0
+
+            c.execute("SELECT user_id, username, full_name, language, reputation FROM users ORDER BY user_id DESC LIMIT 50")
+            all_users = c.fetchall()
 
             c.execute("SELECT domain FROM blacklist")
             blacklist_domains = [row[0] for row in c.fetchall()]
@@ -931,7 +961,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     .card {{ background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }}
                     h1, h2 {{ color: #38bdf8; }}
                     table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-                    th, td {{ border: 1px solid #334155; padding: 10px; text-align: left; }}
+                    th, td {{ border: 1px solid #334155; padding: 10px; text-align: left; font-size: 14px; }}
                     th {{ background: #334155; }}
                     .stat-box {{ display: inline-block; background: #334155; padding: 15px; border-radius: 8px; margin-right: 10px; margin-bottom: 10px; }}
                     textarea {{ width: 100%; height: 100px; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; }}
@@ -940,9 +970,9 @@ class SimpleHandler(BaseHTTPRequestHandler):
                 </style>
             </head>
             <body>
-                <h1>🔐 Admin Panel</h1>
+                <h1>🔐 Admin Panel & Boshqaruv</h1>
                 <div class="card">
-                    <h2>📊 Statistika</h2>
+                    <h2>📊 Umumiy Statistika</h2>
                     <div class="stat-box">Foydalanuvchilar: <b>{user_count}</b></div>
                     <div class="stat-box">Tekshirilganlar: <b>{stats.get('checked_count', 0)}</b></div>
                     <div class="stat-box">Xavfli havolalar: <b>{stats.get('danger_count', 0)}</b></div>
@@ -962,6 +992,16 @@ class SimpleHandler(BaseHTTPRequestHandler):
             """
             for p in pendings:
                 html += f"<tr><td>{p[0]}</td><td>{p[1]}</td><td><b>{p[2]}</b></td><td>{p[3]}</td><td>{p[4]}</td></tr>"
+            html += f"""
+                    </table>
+                </div>
+                <div class="card">
+                    <h2>👥 So'nggi foydalanuvchilar ro'yxati (Oxirgi 50 ta)</h2>
+                    <table>
+                        <tr><th>User ID</th><th>Username</th><th>Ismi</th><th>Til</th><th>Reyting</th></tr>
+            """
+            for u in all_users:
+                html += f"<tr><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td><td><b>{u[4]}</b></td></tr>"
             html += f"""
                     </table>
                 </div>
