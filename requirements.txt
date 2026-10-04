@@ -1,6 +1,8 @@
-aiogram
+
+aiogram>=3.0.0
 google-genai
 pillow
 opencv-python-headless
 numpy
 requests
+psycopg2-binary
