@@ -30,7 +30,7 @@ if not TOKEN:
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Kuchli parolni Render muhitidan (Environment Variables) o'qiymiz, bo'lmasa standart parol
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008_secure_pass")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 MODELS = [
