@@ -13,8 +13,6 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, BotCommand, BotCommandScopeChat, BufferedInputFile
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from google import genai
@@ -30,16 +28,11 @@ if not TOKEN:
 
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ADMIN_PANEL_SECRET = os.getenv("ADMIN_PANEL_SECRET", "kiber_secret_2026")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008")   # <-- shu parolni ishlating
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-MODELS = [
-    "gemini-2.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-]
+MODELS = ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
 
 stats = {
     "checked_count": 0, "danger_count": 0, "file_danger_count": 0,
@@ -148,9 +141,6 @@ logging.basicConfig(level=logging.INFO)
 storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
-
-class AdminAuth(StatesGroup):
-    waiting_password = State()
 
 async def set_commands():
     default_cmds = [
@@ -277,20 +267,21 @@ async def cmd_audit(message: Message):
 
 @dp.message(Command("panel"))
 async def cmd_panel(message: Message):
+    """Faqat admin uchun — web-panelning parol sahifasiga yo‘naltiradi"""
     if message.from_user.id != ADMIN_ID:
         return
     base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
     await message.answer(
         f"🔐 **Admin Web Panel**\n\n"
-        f"Panelni ochish uchun quyidagi havolani bosing:\n"
+        f"Quyidagi havolani bosing:\n"
         f"`{base}/admin`\n\n"
-        f"Parol: `{ADMIN_PASSWORD}`\n\n"
-        f"[Panelni ochish]({base}/admin)",
+        f"[Panelni ochish]({base}/admin)\n\n"
+        f"Parolni **web-sahifada** kiritasiz.",
         parse_mode="Markdown",
         disable_web_page_preview=True
     )
 
-# ---------- PHOTO / VOICE / VIDEO / DOCUMENT / TEXT (oldingi versiyadagi kabi qoldirildi) ----------
+# ---------- PHOTO / VOICE / VIDEO / DOCUMENT / TEXT ----------
 @dp.message(F.photo)
 async def handle_photo(message: Message):
     user = message.from_user
@@ -308,7 +299,7 @@ async def handle_photo(message: Message):
             stats["photo_danger_count"] += 1
             update_user_rep(user.id, -10)
             msg += "⚠️ Ehtiyot bo‘ling! Havola yoki Wi-Fi ma’lumoti bor."
-            await notify_admin(f"🚨 QR\nUser: `{user.id}`\n{qr_data[:100]}")
+            await notify_admin(f"🚨 QR\nUser: `{user.id}`")
         else:
             msg += "✅ Oddiy QR."
         await message.reply(msg, parse_mode="Markdown")
@@ -438,10 +429,11 @@ async def handle_text(message: Message):
     else:
         await message.reply("🔗 Havola qabul qilindi. Skrinshot olinmadi — ehtiyot bo‘ling.")
 
-# ==================== WEB PANEL (LOGIN FORMASI BILAN) ====================
+# ==================== WEB PANEL (2 QISM) ====================
 class WebPanelHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
+
         if parsed.path in ("/", "/health"):
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
@@ -449,21 +441,26 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK - Bot is alive")
             return
 
+        # 1-qism: Parol sahifasi
         if parsed.path == "/admin":
-            # Login formasi
-            html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            html = """<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin Login</title>
 <style>
-body{{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}}
-.card{{background:#1e293b;padding:30px;border-radius:12px;width:320px;text-align:center}}
-input{{width:100%;padding:12px;margin:10px 0;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#fff}}
-button{{background:#0ea5e9;color:#fff;border:none;padding:12px 24px;border-radius:8px;cursor:pointer;width:100%;font-weight:600}}
+body{font-family:system-ui;background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.card{background:#1e293b;padding:32px;border-radius:16px;width:340px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,0.4)}
+h2{margin-top:0;color:#38bdf8}
+input{width:100%;padding:14px;margin:12px 0;border-radius:10px;border:1px solid #334155;background:#0f172a;color:#fff;font-size:16px;box-sizing:border-box}
+button{background:#0ea5e9;color:#fff;border:none;padding:14px;border-radius:10px;cursor:pointer;width:100%;font-weight:600;font-size:16px}
+button:hover{background:#0284c7}
 </style></head><body>
 <div class="card">
 <h2>🔐 Admin Panel</h2>
+<p style="color:#94a3b8;margin-bottom:20px">Parolni kiriting</p>
 <form method="POST" action="/admin">
-<input type="password" name="password" placeholder="Parolni kiriting" required>
+<input type="password" name="password" placeholder="Parol" required autofocus>
 <button type="submit">Kirish</button>
 </form>
 </div></body></html>"""
@@ -478,6 +475,8 @@ button{{background:#0ea5e9;color:#fff;border:none;padding:12px 24px;border-radiu
 
     def do_POST(self):
         parsed = urlparse(self.path)
+
+        # Parol tekshirish
         if parsed.path == "/admin":
             length = int(self.headers.get("Content-Length", 0))
             params = parse_qs(self.rfile.read(length).decode())
@@ -487,10 +486,14 @@ button{{background:#0ea5e9;color:#fff;border:none;padding:12px 24px;border-radiu
                 self.send_response(200)
                 self.send_header("Content-type", "text/html; charset=utf-8")
                 self.end_headers()
-                self.wfile.write(b"<h2 style='color:red;text-align:center;margin-top:50px'>Noto'g'ri parol!</h2><p style='text-align:center'><a href='/admin'>Qayta urinish</a></p>")
+                self.wfile.write("""<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>body{font-family:system-ui;background:#0f172a;color:#e2e8f0;text-align:center;padding-top:80px}
+a{color:#38bdf8}</style></head><body>
+<h2 style="color:#ef4444">❌ Noto‘g‘ri parol!</h2>
+<p><a href="/admin">Qayta urinish</a></p></body></html>""".encode("utf-8"))
                 return
 
-            # Parol to'g'ri — panelni ko'rsatamiz
+            # 2-qism: Asosiy panel (parol to‘g‘ri)
             conn = sqlite3.connect("bot_database.db")
             c = conn.cursor()
             c.execute("SELECT user_id, username, full_name, reputation FROM users ORDER BY reputation DESC LIMIT 50")
@@ -502,7 +505,7 @@ button{{background:#0ea5e9;color:#fff;border:none;padding:12px 24px;border-radiu
             conn.close()
 
             users_rows = "".join(f"<tr><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td></tr>" for u in users)
-            black_rows = "".join(f"<li>{b[0]}</li>" for b in black) or "<li>Bo'sh</li>"
+            black_rows = "".join(f"<li>{b[0]}</li>" for b in black) or "<li>Bo‘sh</li>"
             log_rows = "".join(f"<tr><td>{l[0]}</td><td>{l[1]}</td><td>{str(l[2])[:50]}</td><td>{l[3]}</td></tr>" for l in logs)
 
             html = f"""<!DOCTYPE html>
@@ -515,11 +518,11 @@ body{{font-family:system-ui;background:#0f172a;color:#e2e8f0;margin:0;padding:20
 table{{width:100%;border-collapse:collapse;font-size:13px}}
 th,td{{border:1px solid #334155;padding:6px;text-align:left}}
 th{{background:#0f172a;color:#94a3b8}}
-input,textarea{{width:100%;padding:8px;margin:6px 0;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0}}
+input,textarea{{width:100%;padding:8px;margin:6px 0;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;box-sizing:border-box}}
 button{{background:#0ea5e9;color:white;border:none;padding:8px 14px;border-radius:6px;cursor:pointer}}
 </style></head><body>
 <h1>🛡️ Kiber Admin Panel</h1>
-<p>Kirish vaqti: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<p style="color:#94a3b8">Kirish vaqti: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
 
 <div class="card"><b>Statistika</b><br>
 <div class="stat">Havola<br><b>{stats['checked_count']}</b></div>
@@ -533,16 +536,16 @@ button{{background:#0ea5e9;color:white;border:none;padding:8px 14px;border-radiu
 
 <div class="card"><h3>📢 Broadcast</h3>
 <form method="POST" action="/broadcast">
-<textarea name="message" rows="2" placeholder="E'lon..."></textarea>
+<textarea name="message" rows="2" placeholder="E'lon matni..."></textarea>
 <button type="submit">Yuborish</button></form></div>
 
-<div class="card"><h3>🚫 Qora ro'yxat</h3>
+<div class="card"><h3>🚫 Qora ro‘yxat</h3>
 <form method="POST" action="/add_blacklist">
 <input type="text" name="domain" placeholder="domen.uz">
-<button type="submit">Qo'shish</button></form>
+<button type="submit">Qo‘shish</button></form>
 <ul>{black_rows}</ul></div>
 
-<div class="card"><h3>⚡ Loglar</h3>
+<div class="card"><h3>⚡ So‘nggi loglar</h3>
 <table><tr><th>User</th><th>Amal</th><th>Info</th><th>Vaqt</th></tr>{log_rows}</table></div>
 
 <div class="card"><h3>👥 Foydalanuvchilar</h3>
@@ -577,7 +580,8 @@ button{{background:#0ea5e9;color:white;border:none;padding:8px 14px;border-radiu
             self.send_header("Location", "/admin")
             self.end_headers()
             return
-self.send_response(404)
+
+        self.send_response(404)
         self.end_headers()
 
     def log_message(self, *args): pass
@@ -600,24 +604,21 @@ def run_http_server():
     port = int(os.environ.get("PORT", 10000))
     HTTPServer(("0.0.0.0", port), WebPanelHandler).serve_forever()
 
-# Keep-alive (Render free-tier uchun)
 async def keep_alive():
     while True:
         try:
             base = os.environ.get("RENDER_EXTERNAL_URL")
             if base:
                 requests.get(f"{base}/health", timeout=5)
-                logging.info("Keep-alive ping OK")
-        except Exception as e:
-            logging.warning(f"Keep-alive xato: {e}")
-        await asyncio.sleep(600)  # har 10 daqiqa
+        except: pass
+        await asyncio.sleep(600)
 
 async def main():
     threading.Thread(target=run_http_server, daemon=True).start()
     asyncio.create_task(keep_alive())
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot ishga tushdi (keep-alive + web login bilan)")
+    print("✅ Bot ishga tushdi — Web panel 2 qismli")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
