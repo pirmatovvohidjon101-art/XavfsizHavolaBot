@@ -28,17 +28,11 @@ if not TOKEN:
 
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008")   # <-- shu parolni ishlating
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "pirmatov1008")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = ["gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash"]
-
-stats = {
-    "checked_count": 0, "danger_count": 0, "file_danger_count": 0,
-    "voice_danger_count": 0, "video_danger_count": 0, "photo_danger_count": 0,
-    "screenshot_count": 0, "audit_count": 0,
-}
 
 user_last_message_time = {}
 SPAM_INTERVAL = 1.3
@@ -47,17 +41,49 @@ SPAM_INTERVAL = 1.3
 def init_db():
     conn = sqlite3.connect("bot_database.db")
     c = conn.cursor()
+    
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY, username TEXT, full_name TEXT,
         language TEXT DEFAULT 'uz', reputation INTEGER DEFAULT 100)""")
+    
     c.execute("CREATE TABLE IF NOT EXISTS blacklist (domain TEXT PRIMARY KEY)")
+    
     c.execute("""CREATE TABLE IF NOT EXISTS activity_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER,
         action TEXT, details TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
+    
+    # Statistika uchun doimiy jadval
+    c.execute("""CREATE TABLE IF NOT EXISTS stats (
+        key TEXT PRIMARY KEY,
+        value INTEGER DEFAULT 0
+    )""")
+    
+    default_stats = [
+        ("checked_count", 0), ("danger_count", 0), ("file_danger_count", 0),
+        ("voice_danger_count", 0), ("video_danger_count", 0), ("photo_danger_count", 0),
+        ("screenshot_count", 0), ("audit_count", 0),
+    ]
+    c.executemany("INSERT OR IGNORE INTO stats (key, value) VALUES (?, ?)", default_stats)
+    
     conn.commit()
     conn.close()
 
 init_db()
+
+def load_stats() -> dict:
+    conn = sqlite3.connect("bot_database.db")
+    c = conn.cursor()
+    c.execute("SELECT key, value FROM stats")
+    rows = c.fetchall()
+    conn.close()
+    return {k: v for k, v in rows}
+
+def save_stat(key: str, increment: int = 1):
+    conn = sqlite3.connect("bot_database.db")
+    c = conn.cursor()
+    c.execute("UPDATE stats SET value = value + ? WHERE key = ?", (increment, key))
+    conn.commit()
+    conn.close()
 
 def log_activity(user_id, action, details):
     try:
@@ -99,6 +125,9 @@ def is_globally_blacklisted(domain):
     row = c.fetchone()
     conn.close()
     return bool(row)
+
+# Statistika doimiy yuklanadi
+stats = load_stats()
 
 # ==================== TEXTS ====================
 TEXTS = {
@@ -244,7 +273,10 @@ async def cmd_audit(message: Message):
         await message.answer("❌ `/audit <havola yoki kanal>`")
         return
     target = args[1].strip()
-    stats["audit_count"] += 1
+    
+    stats["audit_count"] = stats.get("audit_count", 0) + 1
+    save_stat("audit_count")
+    
     log_activity(message.from_user.id, "AUDIT", target)
 
     wait_msg = await message.answer(f"🕵️‍♂️ **Kiber-Detektiv** ishga tushdi...\n`{target}`\n\nKuting...", parse_mode="Markdown")
@@ -267,7 +299,6 @@ async def cmd_audit(message: Message):
 
 @dp.message(Command("panel"))
 async def cmd_panel(message: Message):
-    """Faqat admin uchun — web-panelning parol sahifasiga yo‘naltiradi"""
     if message.from_user.id != ADMIN_ID:
         return
     base = os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:10000")
@@ -281,7 +312,6 @@ async def cmd_panel(message: Message):
         disable_web_page_preview=True
     )
 
-# ---------- PHOTO / VOICE / VIDEO / DOCUMENT / TEXT ----------
 @dp.message(F.photo)
 async def handle_photo(message: Message):
     user = message.from_user
@@ -296,7 +326,8 @@ async def handle_photo(message: Message):
         is_danger = any(x in lower for x in ("http", "https", "t.me", "wifi", "begin:wifi"))
         msg = f"📷 **QR-kod aniqlandi!**\n\n`{qr_data[:250]}`\n\n"
         if is_danger:
-            stats["photo_danger_count"] += 1
+            stats["photo_danger_count"] = stats.get("photo_danger_count", 0) + 1
+            save_stat("photo_danger_count")
             update_user_rep(user.id, -10)
             msg += "⚠️ Ehtiyot bo‘ling! Havola yoki Wi-Fi ma’lumoti bor."
             await notify_admin(f"🚨 QR\nUser: `{user.id}`")
@@ -311,7 +342,8 @@ async def handle_photo(message: Message):
         await message.reply(f"⚠️ Tahlil qilib bo‘lmadi.\n{result}")
         return
     if any(w in result.upper() for w in ("XAVFLI", "DANGER", "PHISHING", "SCAM")):
-        stats["photo_danger_count"] += 1
+        stats["photo_danger_count"] = stats.get("photo_danger_count", 0) + 1
+        save_stat("photo_danger_count")
         update_user_rep(user.id, -12)
         await message.reply(f"{TEXTS['photo_danger']}\n\n{result}")
         await notify_admin(f"🚨 Rasm\nUser: `{user.id}`")
@@ -330,7 +362,8 @@ async def handle_voice(message: Message):
         await message.reply(f"⚠️ {result}")
         return
     if "DANGER" in result.upper():
-        stats["voice_danger_count"] += 1
+        stats["voice_danger_count"] = stats.get("voice_danger_count", 0) + 1
+        save_stat("voice_danger_count")
         update_user_rep(user.id, -15)
         await message.reply(f"{TEXTS['voice_danger']}\n\n{result}")
         await notify_admin(f"🚨 Vishing\nUser: `{user.id}`")
@@ -352,7 +385,8 @@ async def handle_video(message: Message):
         await message.reply(f"⚠️ {result}")
         return
     if "DANGER" in result.upper():
-        stats["video_danger_count"] += 1
+        stats["video_danger_count"] = stats.get("video_danger_count", 0) + 1
+        save_stat("video_danger_count")
         update_user_rep(user.id, -15)
         await message.reply(f"{TEXTS['video_danger']}\n\n{result}")
         await notify_admin(f"🚨 Video\nUser: `{user.id}`")
@@ -370,7 +404,8 @@ async def handle_document(message: Message):
         await message.reply("⚠️ Fayl juda katta.")
         return
     if any(name.endswith(ext) for ext in DANGEROUS_EXTENSIONS):
-        stats["file_danger_count"] += 1
+        stats["file_danger_count"] = stats.get("file_danger_count", 0) + 1
+        save_stat("file_danger_count")
         update_user_rep(user.id, -20)
         await message.reply(TEXTS["apk_danger"], parse_mode="Markdown")
         await notify_admin(f"🚨 Fayl: `{name}`\nUser: `{user.id}`")
@@ -389,7 +424,9 @@ async def handle_text(message: Message):
 
     url = extract_url(message.text)
     if not url: return
-    stats["checked_count"] += 1
+    
+    stats["checked_count"] = stats.get("checked_count", 0) + 1
+    save_stat("checked_count")
 
     if url.startswith("t.me/") or "t.me/" in url or "telegram.me/" in url:
         clean = url.replace("https://","").replace("http://","").replace("t.me/","").replace("telegram.me/","").strip("/")
@@ -401,7 +438,8 @@ async def handle_text(message: Message):
     domain = parsed.netloc.lower().removeprefix("www.")
 
     if is_globally_blacklisted(domain):
-        stats["danger_count"] += 1
+        stats["danger_count"] = stats.get("danger_count", 0) + 1
+        save_stat("danger_count")
         update_user_rep(user.id, -10)
         await message.reply("🚨 Bu manzil **qora ro‘yxatda**!")
         return
@@ -412,12 +450,14 @@ async def handle_text(message: Message):
 
     shot = get_webpage_screenshot(full_url)
     if shot:
-        stats["screenshot_count"] += 1
+        stats["screenshot_count"] = stats.get("screenshot_count", 0) + 1
+        save_stat("screenshot_count")
         result = await analyze_with_gemini(
             "Bu sayt skrinshotini tahlil qil. Phishing/scam bormi? Javobni '🚨 PHISHING' yoki '✅ XAVFSIZ' bilan boshla, keyin qisqa o‘zbekcha yoz.",
             shot, "image/jpeg")
         if any(w in result.upper() for w in ("PHISHING","SCAM","XAVFLI","DANGER")):
-            stats["danger_count"] += 1
+            stats["danger_count"] = stats.get("danger_count", 0) + 1
+            save_stat("danger_count")
             update_user_rep(user.id, -15)
             await message.reply_photo(BufferedInputFile(shot, "shot.jpg"),
                                       caption=f"🚨 **PHISHING ANIQLANDI!**\n\n{result}", parse_mode="Markdown")
@@ -441,7 +481,6 @@ class WebPanelHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"OK - Bot is alive")
             return
 
-        # 1-qism: Parol sahifasi
         if parsed.path == "/admin":
             html = """<!DOCTYPE html>
 <html><head>
@@ -476,7 +515,6 @@ button:hover{background:#0284c7}
     def do_POST(self):
         parsed = urlparse(self.path)
 
-        # Parol tekshirish
         if parsed.path == "/admin":
             length = int(self.headers.get("Content-Length", 0))
             params = parse_qs(self.rfile.read(length).decode())
@@ -493,7 +531,9 @@ a{color:#38bdf8}</style></head><body>
 <p><a href="/admin">Qayta urinish</a></p></body></html>""".encode("utf-8"))
                 return
 
-            # 2-qism: Asosiy panel (parol to‘g‘ri)
+            # Yangilangan statistikani bazadan o‘qiymiz
+            current_stats = load_stats()
+
             conn = sqlite3.connect("bot_database.db")
             c = conn.cursor()
             c.execute("SELECT user_id, username, full_name, reputation FROM users ORDER BY reputation DESC LIMIT 50")
@@ -522,15 +562,16 @@ input,textarea{{width:100%;padding:8px;margin:6px 0;border-radius:6px;border:1px
 button{{background:#0ea5e9;color:white;border:none;padding:8px 14px;border-radius:6px;cursor:pointer}}
 </style></head><body>
 <h1>🛡️ Kiber Admin Panel</h1>
-<p style="color:#94a3b8">Kirish vaqti: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+<p style="color:#94a3b8">Kirish vaqti: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Statistika doimiy saqlanadi</p>
 
-<div class="card"><b>Statistika</b><br>
-<div class="stat">Havola<br><b>{stats['checked_count']}</b></div>
-<div class="stat">Phishing<br><b>{stats['danger_count']}</b></div>
-<div class="stat">Fayl<br><b>{stats['file_danger_count']}</b></div>
-<div class="stat">Rasm<br><b>{stats['photo_danger_count']}</b></div>
-<div class="stat">Ovoz<br><b>{stats['voice_danger_count']}</b></div>
-<div class="stat">Video<br><b>{stats['video_danger_count']}</b></div>
+<div class="card"><b>Statistika (doimiy)</b><br>
+<div class="stat">Havola<br><b>{current_stats.get('checked_count', 0)}</b></div>
+<div class="stat">Phishing<br><b>{current_stats.get('danger_count', 0)}</b></div>
+<div class="stat">Fayl<br><b>{current_stats.get('file_danger_count', 0)}</b></div>
+<div class="stat">Rasm<br><b>{current_stats.get('photo_danger_count', 0)}</b></div>
+<div class="stat">Ovoz<br><b>{current_stats.get('voice_danger_count', 0)}</b></div>
+<div class="stat">Video<br><b>{current_stats.get('video_danger_count', 0)}</b></div>
+<div class="stat">Audit<br><b>{current_stats.get('audit_count', 0)}</b></div>
 <div class="stat">User<br><b>{len(users)}</b></div>
 </div>
 
@@ -618,7 +659,7 @@ async def main():
     asyncio.create_task(keep_alive())
     await bot.delete_webhook(drop_pending_updates=True)
     await set_commands()
-    print("✅ Bot ishga tushdi — Web panel 2 qismli")
+    print("✅ Bot ishga tushdi — Statistika doimiy saqlanadi")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
