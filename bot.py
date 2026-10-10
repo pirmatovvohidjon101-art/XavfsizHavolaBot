@@ -27,7 +27,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("BOT_TOKEN topilmadi!")
 
-ADMIN_ID = 5081583283
+ADMIN_ID = os.getenv("ADMIN_ID")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Kuchli parolni Render muhitidan (Environment Variables) o'qiymiz, bo'lmasa standart parol
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
