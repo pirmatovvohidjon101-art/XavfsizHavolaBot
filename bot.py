@@ -4,9 +4,13 @@ import os
 import time
 import sqlite3
 import threading
+import hmac
+import secrets
 import requests
 from io import BytesIO
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from html import escape as _escape
+from http.cookies import SimpleCookie
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
 
@@ -29,8 +33,11 @@ if not TOKEN:
 
 ADMIN_ID = 5081583283
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# Kuchli parolni Render muhitidan (Environment Variables) o'qiymiz, bo'lmasa standart parol
+
+# Admin parol Render muhitidan (Environment Variables) olinadi. Majburiy va kamida 12 belgi.
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+if not ADMIN_PASSWORD or len(ADMIN_PASSWORD) < 12:
+    raise ValueError("ADMIN_PASSWORD o'rnatilmagan yoki 12 belgidan qisqa! Render > Environment bo'limiga qo'shing.")
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 MODELS = [
@@ -42,9 +49,6 @@ MODELS = [
 
 user_last_message_time = {}
 SPAM_INTERVAL = 1.3
-
-# Sessiyalar uchun vaqtinchalik xotira (Oddiy xakerlar kirib ololmasligi uchun)
-ACTIVE_ADMIN_SESSIONS = set()
 
 # ==================== DATABASE ====================
 def init_db():
@@ -218,7 +222,7 @@ def deactivate_group(chat_id: int):
 
 def add_dangerous_url(url: str, user_id: int, reason: str, source: str = "link"):
     try:
-        domain = url.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+        domain = get_domain(url) or ""     # TUZATILDI (2-muammo): to'g'ri domen ajratish
         conn = sqlite3.connect("bot_database.db", check_same_thread=False)
         c = conn.cursor()
         c.execute("INSERT INTO dangerous_urls (url, domain, user_id, reason, source) VALUES (?,?,?,?,?)",
@@ -421,6 +425,44 @@ OFFICIAL_DOMAINS = {
 
 DANGEROUS_EXTENSIONS = {".apk", ".exe", ".bat", ".cmd", ".scr", ".js", ".vbs", ".msi", ".jar", ".com", ".pif", ".hta"}
 
+# ==================== DOMEN YORDAMCHILARI (2-MUAMMO TUZATISHI) ====================
+def get_domain(raw):
+    """URL dan faqat haqiqiy host nomini oladi.
+    'https://evil.com#.gov.uz' -> 'evil.com'
+    'http://gov.uz@evil.com'   -> 'evil.com'
+    'evil.com?x=.gov.uz'       -> 'evil.com'
+    Noto'g'ri yoki bo'sh kirishda None qaytaradi."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        host = urlparse(raw).hostname
+    except ValueError:
+        return None
+    if not host:
+        return None
+    host = host.lower().rstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    try:
+        host = host.encode("idna").decode("ascii")   # o'xshash harflar (homograph) -> xn--...
+    except UnicodeError:
+        return None
+    return host or None
+
+def is_official(host):
+    """Host aynan rasmiy domen yoki uning subdomeni bo'lsa True."""
+    if not host:
+        return False
+    return any(host == d or host.endswith("." + d) for d in OFFICIAL_DOMAINS)
+
+def domain_chain(host):
+    """login.evil.com -> ['login.evil.com', 'evil.com'] (qora ro'yxat subdomenlar uchun ham)"""
+    parts = host.split(".")
+    return [".".join(parts[i:]) for i in range(len(parts) - 1)]
+
 logging.basicConfig(level=logging.INFO)
 storage = MemoryStorage()
 bot = Bot(token=TOKEN)
@@ -619,8 +661,8 @@ async def cmd_block(message: Message):
         return
 
     raw = args[1].strip()
-    domain = raw.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0].strip()
-    
+    domain = get_domain(raw)       # TUZATILDI (2-muammo)
+
     if not domain or "." not in domain:
         await message.answer(t(message.from_user.id, "block_usage"))
         return
@@ -973,18 +1015,23 @@ async def handle_text(message: Message):
     save_stat("checked_count")
     log_activity(user.id, "CHECK_URL", url)
 
-    clean_url = url.lower().replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+    # TUZATILDI (2-muammo): domen urlparse orqali olinadi
+    clean_url = get_domain(url)
+    if not clean_url:
+        await message.reply("⚠️ Havola formati noto‘g‘ri.")
+        return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🚨 Shikoyat qilish / Report", callback_data="quick_report")]])
 
-    if clean_url in OFFICIAL_DOMAINS or any(clean_url.endswith("." + d) for d in OFFICIAL_DOMAINS):
+    if is_official(clean_url):
         update_user_rep(user.id, +1)
         await message.reply(t(user.id, "official"), reply_markup=kb)
         return
 
     is_community_danger = await check_community_blacklists(clean_url)
 
-    if is_globally_blacklisted(clean_url) or is_community_danger:
+    # Qora ro'yxat subdomenlar uchun ham tekshiriladi (login.evil.com -> evil.com)
+    if any(is_globally_blacklisted(d) for d in domain_chain(clean_url)) or is_community_danger:
         stats["danger_count"] = stats.get("danger_count", 0) + 1
         save_stat("danger_count")
         update_user_rep(user.id, -15)
@@ -994,7 +1041,7 @@ async def handle_text(message: Message):
         return
 
     if "t.me/" in url.lower() or "telegram.me/" in url.lower() or url.startswith("@"):
-        await message.reply(t(user.id, "tg_profile", clean=clean_url), parse_mode="Markdown", reply_markup=kb)
+        await message.reply(t(user.id, "tg_profile", clean=url), parse_mode="Markdown", reply_markup=kb)
         return
 
     wait_msg = await message.reply("🔍 Havola tekshirilmoqda...")
@@ -1060,66 +1107,156 @@ async def send_broadcast_message(text: str):
             failed += 1
     await notify_admin(f"📢 **Xabar yuborish yakunlandi!**\n\n✅ Muvaffaqiyatli: {success}\n❌ Xato (bloklaganlar): {failed}")
 
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        parsed = urlparse(self.path)
-        if parsed.path == "/admin/login":
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            params = parse_qs(post_data)
-            password = params.get("password", [""])[0]
+# ---------- XSS himoyasi (3-muammo) ----------
+def esc(v):
+    """None -> '', qolganini HTML uchun xavfsiz qiladi (<, >, &, ", ')."""
+    return _escape("" if v is None else str(v), quote=True)
 
-            if password == ADMIN_PASSWORD:
-                session_token = f"sess_{int(time.time())}_{os.urandom(4).hex()}"
-                ACTIVE_ADMIN_SESSIONS.add(session_token)
-                
-                self.send_response(303)
-                self.send_header("Location", "/admin")
-                self.send_header("Set-Cookie", f"admin_session={session_token}; Path=/; HttpOnly; SameSite=Lax")
-                self.end_headers()
-            else:
-                self.send_response(401)
-                self.send_header("Content-type", "text/html; charset=utf-8")
-                self.end_headers()
-            self.wfile.write("<h1>❌ Noto'g'ri parol!</h1><a href='/admin'>Qayta urinish</a>".encode('utf-8'))
+# ---------- Admin panel xavfsizligi (4-muammo) ----------
+SESSION_TTL = 2 * 60 * 60        # sessiya 2 soat
+MAX_FAILS = 5                    # 5 ta xato paroldan keyin
+LOCK_SECONDS = 15 * 60           # 15 daqiqa bloklanadi
 
-        elif parsed.path == "/admin/broadcast":
-            # Cookie orqali sessiyani tekshiramiz (Xakerlar kirmasligi uchun)
-            cookie_header = self.headers.get("Cookie", "")
-            if not any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS):
-                self.send_response(403)
-                self.end_headers()
-                self.wfile.write(b"Forbidden: Ruxsat etilmagan!")
-                return
+ADMIN_SESSIONS = {}              # token -> {"exp": vaqt, "csrf": token}
+LOGIN_FAILS = {}                 # ip -> [xato vaqtlari]
+_sec_lock = threading.Lock()
 
-            content_length = int(self.headers.get('Content-Length', 0))
-            post_data = self.rfile.read(content_length).decode('utf-8')
-            params = parse_qs(post_data)
-            msg_text = params.get("message", [""])[0]
+def create_session():
+    token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(24)
+    now = time.time()
+    with _sec_lock:
+        for k in [k for k, v in ADMIN_SESSIONS.items() if v["exp"] < now]:
+            del ADMIN_SESSIONS[k]
+        ADMIN_SESSIONS[token] = {"exp": now + SESSION_TTL, "csrf": csrf}
+    return token
 
-            if msg_text:
-                asyncio.run_coroutine_threadsafe(send_broadcast_message(msg_text), bot_loop)
-                self.send_response(200)
-                self.send_header("Content-type", "text/html; charset=utf-8")
-                self.end_headers()
-                self.wfile.write("<h1>✅ Xabar yuborish boshlandi!</h1><p><a href='/admin'>Orqaga qaytish</a></p>".encode("utf-8"))
-            else:
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(b"Xabar matni bosh bolishi mumkin emas!")
-        else:
-            self.send_response(404)
-            self.end_headers()
+def get_session(token):
+    if not token:
+        return None
+    with _sec_lock:
+        s = ADMIN_SESSIONS.get(token)
+        if s and s["exp"] > time.time():
+            return s
+        ADMIN_SESSIONS.pop(token, None)
+    return None
+
+def login_blocked(ip):
+    now = time.time()
+    with _sec_lock:
+        fails = [x for x in LOGIN_FAILS.get(ip, []) if now - x < LOCK_SECONDS]
+        LOGIN_FAILS[ip] = fails
+        return len(fails) >= MAX_FAILS
+
+def register_fail(ip):
+    with _sec_lock:
+        LOGIN_FAILS.setdefault(ip, []).append(time.time())
+
+def clear_fails(ip):
+    with _sec_lock:
+        LOGIN_FAILS.pop(ip, None)
+
+def same(a, b):
+    """Vaqt bo'yicha hujumga (timing attack) chidamli solishtirish."""
+    return hmac.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
+
+class SecureAdminMixin:
+    def _client_ip(self):
+        xff = self.headers.get("X-Forwarded-For", "")
+        return xff.split(",")[-1].strip() if xff else self.client_address[0]
+
+    def _session(self):
+        c = SimpleCookie()
+        try:
+            c.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return None
+        m = c.get("admin_session")
+        return get_session(m.value if m else None)
 
     def _is_authenticated(self):
-        cookie_header = self.headers.get("Cookie", "")
-        return any(f"admin_session={s}" in cookie_header for s in ACTIVE_ADMIN_SESSIONS)
+        return self._session() is not None
 
-    def _send_html(self, html: str, status: int = 200):
+    def _security_headers(self):
+        # Skriptlar umuman ishlamaydi: esc() unutilgan joy bo'lsa ham XSS to'xtaydi
+        self.send_header("Content-Security-Policy",
+                         "default-src 'none'; style-src 'unsafe-inline'; "
+                         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Cache-Control", "no-store")
+
+    def _send_html(self, body: str, status: int = 200):
+        data = body.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self._security_headers()
         self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
+        self.wfile.write(data)
+
+    def _read_form(self):
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return {}
+        if n <= 0 or n > 20000:
+            return {}
+        return parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+
+        if path == "/admin/login":
+            ip = self._client_ip()
+            if login_blocked(ip):
+                self._send_html("<h1>Juda ko'p urinish. 15 daqiqadan keyin qayta urinib ko'ring.</h1>", 429)
+                return
+            password = self._read_form().get("password", [""])[0]
+            if same(password, ADMIN_PASSWORD):
+                clear_fails(ip)
+                token = create_session()
+                secure = "; Secure" if self.headers.get("X-Forwarded-Proto") == "https" else ""
+                self.send_response(303)
+                self.send_header("Location", "/admin")
+                self.send_header("Set-Cookie",
+                                 f"admin_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}{secure}")
+                self.end_headers()
+            else:
+                register_fail(ip)
+                time.sleep(1)    # tezkor taxminlarni sekinlashtiradi
+                self._send_html("<h1>❌ Noto'g'ri parol!</h1><a href='/admin'>Qayta urinish</a>", 401)
+            return
+
+        sess = self._session()
+        if not sess:
+            self._send_html("Forbidden", 403)
+            return
+        form = self._read_form()
+        if not same(form.get("csrf", [""])[0], sess["csrf"]):      # CSRF himoyasi
+            self._send_html("Forbidden: CSRF", 403)
+            return
+
+        if path == "/admin/broadcast":
+            msg = form.get("message", [""])[0].strip()[:4000]
+            if not msg:
+                self._send_html("Xabar matni bo'sh bo'lishi mumkin emas!", 400)
+                return
+            asyncio.run_coroutine_threadsafe(send_broadcast_message(msg), bot_loop)
+            self._send_html("<h1>✅ Xabar yuborish boshlandi!</h1><p><a href='/admin'>Orqaga qaytish</a></p>")
+        elif path == "/admin/logout":
+            with _sec_lock:
+                for k, v in list(ADMIN_SESSIONS.items()):
+                    if v is sess:
+                        del ADMIN_SESSIONS[k]
+            self.send_response(303)
+            self.send_header("Location", "/admin")
+            self.send_header("Set-Cookie", "admin_session=; Path=/; Max-Age=0")
+            self.end_headers()
+        else:
+            self._send_html("Not Found", 404)
+
+class SimpleHandler(SecureAdminMixin, BaseHTTPRequestHandler):
 
     def _common_css(self):
         return """
@@ -1192,6 +1329,8 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     return
 
                 # Asosiy admin panel
+                sess = self._session()
+                csrf = esc(sess["csrf"]) if sess else ""
                 current_stats = load_stats()
                 user_count = 0
                 groups_count = get_groups_count()
@@ -1242,6 +1381,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                     <div class="card">
                         <h2>📢 Barcha foydalanuvchilarga xabar yuborish (Broadcast)</h2>
                         <form action="/admin/broadcast" method="POST">
+                            <input type="hidden" name="csrf" value="{csrf}">
                             <textarea name="message" placeholder="Barcha foydalanuvchilarga yuboriladigan xabarni yozing..." required></textarea><br>
                             <button type="submit">Xabarni yuborish 🚀</button>
                         </form>
@@ -1253,14 +1393,22 @@ class SimpleHandler(BaseHTTPRequestHandler):
                             <tr><th>ID</th><th>User ID</th><th>Domen</th><th>Sabab</th><th>Vaqt</th></tr>
                 """
                 for p in pendings:
-                    html += f"<tr><td>{p[0]}</td><td>{p[1]}</td><td><b>{p[2]}</b></td><td>{(p[3] or '')[:80]}</td><td>{p[4]}</td></tr>"
+                    html += f"<tr><td>{esc(p[0])}</td><td>{esc(p[1])}</td><td><b>{esc(p[2])}</b></td><td>{esc((p[3] or '')[:80])}</td><td>{esc(p[4])}</td></tr>"
+                bl_text = ', '.join(esc(x) for x in blacklist_domains) if blacklist_domains else "Hozircha bo'sh"
                 html += f"""
                         </table>
                     </div>
 
                     <div class="card">
                         <h2>🛡️ Qora ro'yxatdagi domenlar ({len(blacklist_domains)})</h2>
-                        <p>{', '.join(blacklist_domains) if blacklist_domains else "Hozircha bo'sh"}</p>
+                        <p>{bl_text}</p>
+                    </div>
+
+                    <div class="card">
+                        <form action="/admin/logout" method="POST">
+                            <input type="hidden" name="csrf" value="{csrf}">
+                            <button type="submit">Chiqish</button>
+                        </form>
                     </div>
                 </body>
                 </html>
@@ -1292,7 +1440,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                             <tr><th>#</th><th>User ID</th><th>Username</th><th>Ismi</th><th>Til</th><th>Reyting</th></tr>
                 """
                 for i, u in enumerate(users, 1):
-                    html += f"<tr><td>{i}</td><td>{u[0]}</td><td>@{u[1] or '-'}</td><td>{u[2]}</td><td>{u[3]}</td><td><b>{u[4]}</b></td></tr>"
+                    html += f"<tr><td>{i}</td><td>{esc(u[0])}</td><td>@{esc(u[1] or '-')}</td><td>{esc(u[2])}</td><td>{esc(u[3])}</td><td><b>{esc(u[4])}</b></td></tr>"
                 html += """
                         </table>
                     </div>
@@ -1326,8 +1474,8 @@ class SimpleHandler(BaseHTTPRequestHandler):
                             <tr><th>#</th><th>Chat ID</th><th>Nomi</th><th>Username</th><th>Turi</th><th>A'zolar</th><th>Qo'shilgan vaqt</th></tr>
                 """
                 for i, g in enumerate(groups, 1):
-                    uname = f"@{g[2]}" if g[2] else "-"
-                    html += f"<tr><td>{i}</td><td>{g[0]}</td><td><b>{g[1]}</b></td><td>{uname}</td><td>{g[3]}</td><td>{g[4]}</td><td>{g[5]}</td></tr>"
+                    uname = f"@{esc(g[2])}" if g[2] else "-"
+                    html += f"<tr><td>{i}</td><td>{esc(g[0])}</td><td><b>{esc(g[1])}</b></td><td>{uname}</td><td>{esc(g[3])}</td><td>{esc(g[4])}</td><td>{esc(g[5])}</td></tr>"
                 if not groups:
                     html += "<tr><td colspan='7'>Hozircha guruhlar yo'q. Bot guruhga qo'shilganda avtomatik yoziladi.</td></tr>"
                 html += """
@@ -1364,7 +1512,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
                 """
                 for i, d in enumerate(dangers, 1):
                     reason_short = (d[4] or "")[:100]
-                    html += f"<tr><td>{i}</td><td>{d[1]}</td><td><b>{d[2]}</b></td><td>{d[3]}</td><td>{d[5]}</td><td>{reason_short}</td><td>{d[6]}</td></tr>"
+                    html += f"<tr><td>{i}</td><td>{esc(d[1])}</td><td><b>{esc(d[2])}</b></td><td>{esc(d[3])}</td><td>{esc(d[5])}</td><td>{esc(reason_short)}</td><td>{esc(d[6])}</td></tr>"
                 if not dangers:
                     html += "<tr><td colspan='7'>Hozircha xavfli havolalar saqlanmagan. Yangi xavfli havolalar avtomatik yoziladi.</td></tr>"
                 html += """
@@ -1392,7 +1540,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), SimpleHandler)
     server.serve_forever()
 
 # ==================== MAIN ====================
@@ -1402,8 +1550,8 @@ async def main():
     global bot_loop
     bot_loop = asyncio.get_running_loop()
 
-    t = threading.Thread(target=run_server, daemon=True)
-    t.start()
+    th = threading.Thread(target=run_server, daemon=True)
+    th.start()
     
     await set_commands()
     logging.info("Xavfsiz Bot ishga tushdi...")
