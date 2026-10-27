@@ -7,6 +7,7 @@ import re
 import secrets
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 from html import escape as h, unescape as unh
 from http.cookies import SimpleCookie
@@ -18,7 +19,7 @@ import cv2
 import numpy as np
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter, TelegramForbiddenError
 from aiogram.filters import Command
 from aiogram.filters.chat_member_updated import ChatMemberUpdatedFilter, IS_MEMBER, IS_NOT_MEMBER
 from aiogram.types import (Message, BotCommand, BotCommandScopeChat, InlineKeyboardMarkup,
@@ -48,12 +49,9 @@ USE_PG = bool(DATABASE_URL)
 URLHAUS_KEY = os.getenv("URLHAUS_AUTH_KEY")   # ixtiyoriy (abuse.ch kaliti)
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
-MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-]
+_default_models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+# Model nomi noto'g'ri bo'lsa kodni o'zgartirmasdan Render > Environment > GEMINI_MODELS (vergul bilan) orqali almashtiring
+MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", "").split(",") if m.strip()] or _default_models
 LANGS = ("uz", "ru", "en")
 LANG_NAMES = {"uz": "Uzbek (Latin script)", "ru": "Russian", "en": "English"}
 SPAM_INTERVAL = 1.3
@@ -66,21 +64,26 @@ if not USE_PG:
 if USE_PG:
     import psycopg2
     from psycopg2 import pool as pg_pool
-    _pool = pg_pool.ThreadedConnectionPool(1, 8, DATABASE_URL, keepalives=1,
+    _pool = pg_pool.ThreadedConnectionPool(1, 12, DATABASE_URL, keepalives=1,
                                            keepalives_idle=30, keepalives_interval=10, keepalives_count=5)
 
-def _pg_conn():
+_conn_used = {}   # id(conn) -> oxirgi ishlatilgan vaqt
+
+def _pg_conn(fresh=False):
     for _ in range(3):
         conn = _pool.getconn()
         try:
             if conn.closed:
                 raise psycopg2.OperationalError("closed")
-            cur = conn.cursor()
-            cur.execute("SELECT 1")
-            cur.close()
-            conn.rollback()
+            if fresh or time.time() - _conn_used.get(id(conn), 0) > 20:   # uzoq turgan ulanishni tekshirish
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.close()
+                conn.rollback()
+            _conn_used[id(conn)] = time.time()
             return conn
         except Exception:
+            _conn_used.pop(id(conn), None)
             try:
                 _pool.putconn(conn, close=True)
             except Exception:
@@ -97,6 +100,17 @@ class Db:
     def execute(self, sql, params=()):
         if USE_PG:
             sql = sql.replace("?", "%s")
+            try:
+                self.cur.execute(sql, params)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                try:      # ulanish uzilgan (Neon uxlagan): yangisini olib bir marta qayta urinamiz
+                    _pool.putconn(self.conn, close=True)
+                except Exception:
+                    pass
+                self.conn = _pg_conn(fresh=True)
+                self.cur = self.conn.cursor()
+                self.cur.execute(sql, params)
+            return self.cur
         self.cur.execute(sql, params)
         return self.cur
 
@@ -130,6 +144,7 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER DEFAULT 0)",
         f"CREATE TABLE IF NOT EXISTS pending_blocks (id {pk}, user_id {big}, domain TEXT, reason TEXT, status TEXT DEFAULT 'pending', created_at {ts} DEFAULT CURRENT_TIMESTAMP)",
         f"CREATE TABLE IF NOT EXISTS chat_groups (chat_id {big} PRIMARY KEY, title TEXT, username TEXT, chat_type TEXT, members_count INTEGER DEFAULT 0, added_at {ts} DEFAULT CURRENT_TIMESTAMP, is_active INTEGER DEFAULT 1)",
+        f"CREATE TABLE IF NOT EXISTS reports (id {pk}, user_id {big}, kind TEXT, subject TEXT, verdict TEXT, reasons TEXT, status TEXT DEFAULT 'pending', created_at {ts} DEFAULT CURRENT_TIMESTAMP, src_chat {big}, src_msg {big})",
         f"CREATE TABLE IF NOT EXISTS dangerous_urls (id {pk}, url TEXT, domain TEXT, user_id {big}, reason TEXT, source TEXT DEFAULT 'link', detected_at {ts} DEFAULT CURRENT_TIMESTAMP)",
     ]
     with Db() as d:
@@ -159,25 +174,42 @@ def user_exists(user_id) -> bool:
     with Db() as d:
         return d.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)).fetchone() is not None
 
+_seen = {}         # uid -> (vaqt, username, full_name): har xabarda bazaga yozmaslik uchun
+_lang_cache = {}   # uid -> til: t() har chaqirilganda bazaga bormaslik uchun
+
 def add_user(user_id, username, full_name, language="uz"):
     """Yangi foydalanuvchi har doim 'uz' bilan boshlanadi. Mavjudning tili O'ZGARMAYDI."""
+    username, full_name = str(username or "")[:50], str(full_name or "User")[:100]
+    sv = _seen.get(user_id)
+    if sv and time.time() - sv[0] < 600 and sv[1] == username and sv[2] == full_name:
+        return
     with Db() as d:
         d.execute("""INSERT INTO users (user_id, username, full_name, language) VALUES (?,?,?,?)
                      ON CONFLICT (user_id) DO UPDATE SET username = excluded.username, full_name = excluded.full_name""",
-                  (user_id, str(username or "")[:50], str(full_name or "User")[:100], language))
+                  (user_id, username, full_name, language))
+    if len(_seen) > 20000:
+        _seen.clear()
+    _seen[user_id] = (time.time(), username, full_name)
 
 def get_user_lang(user_id: int) -> str:
+    lang = _lang_cache.get(user_id)
+    if lang:
+        return lang
     try:
         with Db() as d:
             row = d.execute("SELECT language FROM users WHERE user_id = ?", (user_id,)).fetchone()
-        return row[0] if row and row[0] in LANGS else "uz"
     except Exception:
         return "uz"
+    lang = row[0] if row and row[0] in LANGS else "uz"
+    if row:
+        _lang_cache[user_id] = lang
+    return lang
 
 def set_user_lang(user_id: int, lang: str):
     with Db() as d:
         d.execute("""INSERT INTO users (user_id, username, full_name, language) VALUES (?, '', 'User', ?)
                      ON CONFLICT (user_id) DO UPDATE SET language = excluded.language""", (user_id, lang))
+    _lang_cache[user_id] = lang
 
 def update_user_rep(user_id, change):
     with Db() as d:
@@ -261,6 +293,92 @@ def get_pendings():
 def ensure_user(user_id):
     with Db() as d:
         d.execute("INSERT INTO users (user_id, username, full_name, language) VALUES (?, '', 'Admin', 'uz') ON CONFLICT (user_id) DO NOTHING", (user_id,))
+
+# ---------- admin panel / shikoyatlar uchun ----------
+def forget_user(uid):
+    _seen.pop(uid, None)
+    _lang_cache.pop(uid, None)
+
+def delete_user(uid):
+    with Db() as d:
+        d.execute("DELETE FROM users WHERE user_id = ?", (uid,))
+    forget_user(uid)
+
+def delete_group(chat_id):
+    with Db() as d:
+        d.execute("DELETE FROM chat_groups WHERE chat_id = ?", (chat_id,))
+
+def delete_dangerous(did):
+    with Db() as d:
+        d.execute("DELETE FROM dangerous_urls WHERE id = ?", (did,))
+
+def get_dangerous(did):
+    with Db() as d:
+        return d.execute("SELECT id, url, domain FROM dangerous_urls WHERE id = ?", (did,)).fetchone()
+
+def remove_blacklist(key):
+    with Db() as d:
+        d.execute("DELETE FROM blacklist WHERE domain = ?", (key.lower(),))
+
+def get_requests(limit=300):
+    with Db() as d:
+        return d.execute("SELECT id, user_id, domain, reason, status, created_at FROM pending_blocks "
+                         "ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id DESC LIMIT ?", (limit,)).fetchall()
+
+def delete_request(rid):
+    with Db() as d:
+        d.execute("DELETE FROM pending_blocks WHERE id = ?", (rid,))
+
+REPORT_COLS = "id, user_id, kind, subject, verdict, reasons, status, created_at, src_chat, src_msg"
+
+def add_report(user_id, kind, subject, verdict, reasons, src_chat, src_msg) -> int:
+    args = (user_id, kind, subject[:300], verdict, (reasons or "")[:500], src_chat, src_msg)
+    sql = "INSERT INTO reports (user_id, kind, subject, verdict, reasons, src_chat, src_msg) VALUES (?,?,?,?,?,?,?)"
+    with Db() as d:
+        if USE_PG:
+            return d.execute(sql + " RETURNING id", args).fetchone()[0]
+        return d.execute(sql, args).lastrowid
+
+def get_report(rid):
+    with Db() as d:
+        return d.execute(f"SELECT {REPORT_COLS} FROM reports WHERE id = ?", (rid,)).fetchone()
+
+def get_reports(limit=300):
+    with Db() as d:
+        return d.execute(f"SELECT {REPORT_COLS} FROM reports ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, id DESC LIMIT ?", (limit,)).fetchall()
+
+def update_report_status(rid, status):
+    with Db() as d:
+        d.execute("UPDATE reports SET status = ? WHERE id = ?", (status, rid))
+
+def delete_report(rid):
+    with Db() as d:
+        d.execute("DELETE FROM reports WHERE id = ?", (rid,))
+
+def find_open_report(user_id, subject):
+    with Db() as d:
+        return d.execute("SELECT id FROM reports WHERE user_id = ? AND subject = ? AND status = 'pending'", (user_id, subject[:300])).fetchone()
+
+def get_logs(action=None, limit=300):
+    with Db() as d:
+        if action:
+            return d.execute("SELECT id, user_id, action, details, created_at FROM activity_logs WHERE action = ? ORDER BY id DESC LIMIT ?", (action, limit)).fetchall()
+        return d.execute("SELECT id, user_id, action, details, created_at FROM activity_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+def clear_logs(action=None):
+    with Db() as d:
+        if action:
+            d.execute("DELETE FROM activity_logs WHERE action = ?", (action,))
+        else:
+            d.execute("DELETE FROM activity_logs")
+
+def get_user_row(uid):
+    with Db() as d:
+        return d.execute("SELECT user_id, username, full_name, language, reputation FROM users WHERE user_id = ?", (uid,)).fetchone()
+
+def get_user_logs(uid, limit=50):
+    with Db() as d:
+        return d.execute("SELECT id, action, details, created_at FROM activity_logs WHERE user_id = ? ORDER BY id DESC LIMIT ?", (uid, limit)).fetchall()
 
 # ==================== MATNLAR (uz / ru / en) ====================
 TEXTS = {
@@ -430,6 +548,40 @@ TEXTS = {
  "tr_ok": "worked", "tr_fail": "failed, original text was sent",
 },
 }
+
+TEXTS["uz"].update({
+ "report_received": "⏳ Shikoyat qabul qilindi. AI tekshirmoqda...",
+ "report_dup": "ℹ️ Bu shikoyat allaqachon yuborilgan va ko‘rib chiqilmoqda.",
+ "report_none": "⚠️ Shikoyat qilish uchun asl xabar topilmadi.",
+ "report_sent": "✅ AI tekshiruvi tugadi, shikoyat adminga yuborildi. Qaror haqida xabar beramiz.",
+ "report_confirmed": "✅ Shikoyatingiz tasdiqlandi: <code>{subject}</code> xavfli deb belgilandi. Rahmat!",
+ "report_dismissed": "❌ Shikoyatingiz ko‘rib chiqildi, lekin tasdiqlanmadi: <code>{subject}</code>",
+ "a_report_req": "📢 <b>Yangi shikoyat</b>\n\nTuri: <b>{kind}</b>\nObyekt: <code>{subject}</code>\nFoydalanuvchi: <code>{uid}</code> (@{username})\nAI xulosasi: <b>{verdict}</b>\n{reason}\n\nTasdiqlaysizmi?",
+ "a_rep_ok_done": "✅ <b>Shikoyat tasdiqlandi</b>\n\n<code>{subject}</code>",
+ "a_rep_no_done": "❌ <b>Shikoyat rad etildi</b>\n\n<code>{subject}</code>",
+})
+TEXTS["ru"].update({
+ "report_received": "⏳ Жалоба принята. AI проверяет...",
+ "report_dup": "ℹ️ Эта жалоба уже отправлена и рассматривается.",
+ "report_none": "⚠️ Исходное сообщение для жалобы не найдено.",
+ "report_sent": "✅ AI-проверка завершена, жалоба отправлена админу. Сообщим о решении.",
+ "report_confirmed": "✅ Ваша жалоба подтверждена: <code>{subject}</code> помечен как опасный. Спасибо!",
+ "report_dismissed": "❌ Ваша жалоба рассмотрена, но не подтверждена: <code>{subject}</code>",
+ "a_report_req": "📢 <b>Новая жалоба</b>\n\nТип: <b>{kind}</b>\nОбъект: <code>{subject}</code>\nПользователь: <code>{uid}</code> (@{username})\nВывод AI: <b>{verdict}</b>\n{reason}\n\nПодтвердить?",
+ "a_rep_ok_done": "✅ <b>Жалоба подтверждена</b>\n\n<code>{subject}</code>",
+ "a_rep_no_done": "❌ <b>Жалоба отклонена</b>\n\n<code>{subject}</code>",
+})
+TEXTS["en"].update({
+ "report_received": "⏳ Report received. AI is checking...",
+ "report_dup": "ℹ️ This report was already submitted and is being reviewed.",
+ "report_none": "⚠️ The original message for this report was not found.",
+ "report_sent": "✅ AI check finished, the report was sent to the admin. We will tell you the decision.",
+ "report_confirmed": "✅ Your report was confirmed: <code>{subject}</code> is marked as dangerous. Thank you!",
+ "report_dismissed": "❌ Your report was reviewed but not confirmed: <code>{subject}</code>",
+ "a_report_req": "📢 <b>New report</b>\n\nType: <b>{kind}</b>\nObject: <code>{subject}</code>\nUser: <code>{uid}</code> (@{username})\nAI verdict: <b>{verdict}</b>\n{reason}\n\nApprove?",
+ "a_rep_ok_done": "✅ <b>Report approved</b>\n\n<code>{subject}</code>",
+ "a_rep_no_done": "❌ <b>Report rejected</b>\n\n<code>{subject}</code>",
+})
 
 def t(user_id: int, key: str, **kw) -> str:
     """Foydalanuvchi tanlagan tilda matn. kw qiymatlari HTML uchun avtomatik tozalanadi."""
@@ -644,7 +796,7 @@ async def community_flagged(domain: str) -> bool:
     if not URLHAUS_KEY:
         return False
     try:
-        return await asyncio.to_thread(_urlhaus, domain)
+        return await run_io(_urlhaus, domain)
     except Exception:
         return False
 
@@ -654,6 +806,10 @@ dp = Dispatcher(storage=MemoryStorage())
 BOT_USERNAME = None
 _cool = {}
 _last_err_notice = 0.0
+IO_POOL = ThreadPoolExecutor(max_workers=24)      # requests chaqiruvlari uchun (asosiy havza to'lib qolmasin)
+
+def run_io(fn, *args):
+    return asyncio.get_running_loop().run_in_executor(IO_POOL, lambda: fn(*args))
 
 def cooldown_ok(uid, key, secs):
     now = time.time()
@@ -740,24 +896,62 @@ def parse_json(raw):
         m = re.search(r"\{.*\}", s, re.S)
         return json.loads(m.group(0)) if m else {}
 
-async def ai_call(contents, system=None, json_mode=False, budget=25.0, per_call=12.0, uid=None, ctx="ai"):
+_ai_sem = None
+_model_block = {}      # model -> shu vaqtgacha o'tkazib yuboriladi
+
+def _get_sem():
+    global _ai_sem
+    if _ai_sem is None:
+        _ai_sem = asyncio.Semaphore(4)       # bir vaqtda 4 ta AI so'rovi, qolganlari navbatda kutadi
+    return _ai_sem
+
+def _classify(msg):
+    m = msg.lower()
+    if "429" in m or "resource_exhausted" in m or "quota" in m or ("rate" in m and "limit" in m):
+        return "rate"
+    if "404" in m or "not_found" in m or "not found" in m:
+        return "missing"
+    if "503" in m or "unavailable" in m or "overloaded" in m or "high demand" in m:
+        return "busy"
+    return "other"
+
+async def ai_call(contents, system=None, json_mode=False, budget=40.0, per_call=15.0, uid=None, ctx="ai"):
     start, last = time.time(), ""
     cfg = types.GenerateContentConfig(system_instruction=system,
                                       response_mime_type="application/json" if json_mode else None)
-    for model in MODELS:
-        left = budget - (time.time() - start)
-        if left < 2:
-            break
-        try:
-            resp = await asyncio.wait_for(
-                asyncio.to_thread(ai_client.models.generate_content, model=model, contents=contents, config=cfg),
-                timeout=min(per_call, left))
-            if resp.text:
-                return resp.text
-        except Exception as e:
-            last = str(e)
-            if "503" in last or "high demand" in last.lower():
-                await asyncio.sleep(1)
+    try:
+        await asyncio.wait_for(_get_sem().acquire(), timeout=budget)
+    except asyncio.TimeoutError:
+        await notify_error(ctx, "AI navbati to'lib ketdi", uid)
+        raise RuntimeError("queue timeout")
+    try:
+        for rnd in range(2):
+            now = time.time()
+            usable = [m for m in MODELS if _model_block.get(m, 0) <= now] or list(MODELS)
+            for model in usable:
+                left = budget - (time.time() - start)
+                if left < 2:
+                    break
+                try:
+                    resp = await asyncio.wait_for(
+                        ai_client.aio.models.generate_content(model=model, contents=contents, config=cfg),
+                        timeout=min(per_call, left))
+                    if resp.text:
+                        return resp.text
+                except Exception as e:
+                    last = f"{model}: {e}"
+                    kind = _classify(str(e))
+                    if kind == "rate":
+                        _model_block[model] = time.time() + 45       # limit tugagan model 45 soniya dam oladi
+                    elif kind == "missing":
+                        _model_block[model] = time.time() + 1800     # model nomi noto'g'ri bo'lishi mumkin
+                    elif kind == "busy":
+                        await asyncio.sleep(1)
+            if time.time() - start > budget - 3:
+                break
+            await asyncio.sleep(2)
+    finally:
+        _get_sem().release()
     await notify_error(ctx, last or "empty response", uid)
     raise RuntimeError(last or "AI error")
 
@@ -766,8 +960,8 @@ async def ai_verdict(prompt, uid, data=None, mime=None):
     system = SYS_VERDICT.replace("{lang}", LANG_NAMES[get_user_lang(uid)])
     contents = [prompt] if data is None else [prompt, types.Part.from_bytes(data=data, mime_type=mime)]
     try:
-        raw = await ai_call(contents, system, True, budget=45.0 if data else 25.0,
-                            per_call=20.0 if data else 12.0, uid=uid, ctx="ai_verdict")
+        raw = await ai_call(contents, system, True, budget=60.0 if data else 40.0,
+                            per_call=25.0 if data else 15.0, uid=uid, ctx="ai_verdict")
         d = parse_json(raw)
     except Exception:
         return None
@@ -780,14 +974,17 @@ async def ai_verdict(prompt, uid, data=None, mime=None):
     reasons = [str(x).strip() for x in reasons if str(x).strip()][:3]
     return {"verdict": v, "reasons": reasons, "advice": str(d.get("advice") or "").strip()}
 
-async def translate_all(text):
-    prompt = ("Translate this announcement into Uzbek (Latin script), Russian and English. Keep emojis, line breaks and links unchanged. If the text is already in one of these languages, keep that version exactly as written. "
-              "Return ONLY JSON: {\"uz\":\"...\",\"ru\":\"...\",\"en\":\"...\"}\n\nANNOUNCEMENT:\n" + text)
-    try:
-        d = parse_json(await ai_call([prompt], None, True, budget=30.0, per_call=25.0, ctx="translate"))
-        return {k: str(d[k]) for k in LANGS if d.get(k)}
-    except Exception:
-        return {}
+async def translate_one(text, lang):
+    prompt = (f"Translate the following announcement into {LANG_NAMES[lang]}. Keep emojis, line breaks and links unchanged. "
+              f"If it is already in that language, return it exactly as written. Return only the translation, no comments.\n\n{text}")
+    for _ in range(2):
+        try:
+            out = (await ai_call([prompt], None, False, budget=40.0, per_call=20.0, ctx="translate")).strip()
+            if out:
+                return out
+        except Exception:
+            await asyncio.sleep(3)
+    return None
 
 # ==================== NATIJANI KO'RSATISH ====================
 ICONS = {"SCAM": "🚨", "SAFE": "✅", "UNSURE": "⚠️"}
@@ -811,7 +1008,20 @@ def fmt_verdict(uid, res, ctx=None, subject=None, advice=None, n=1):
 def static_res(verdict, reasons, advice, tg=None, source="static"):
     return {"verdict": verdict, "reasons": reasons, "advice": advice, "target": tg, "source": source}
 
-async def assess_target(raw, uid):
+_vcache = {}       # (til, kalit) -> (vaqt, natija): bir xil havola uchun AI'ni qayta chaqirmaslik
+
+def _cache_get(lang, key):
+    v = _vcache.get((lang, key))
+    if v and time.time() - v[0] < 6 * 3600:
+        return dict(v[1])
+    return None
+
+def _cache_put(lang, key, res):
+    if len(_vcache) > 3000:
+        _vcache.clear()
+    _vcache[(lang, key)] = (time.time(), {k: res.get(k) for k in ("verdict", "reasons", "advice", "source")})
+
+async def assess_target(raw, uid, fresh=False):
     """Sayt, kanal yoki profilni tekshiradi. None = format xato; verdict 'ERROR' = AI ishlamadi."""
     tg = parse_target(raw)
     if not tg:
@@ -821,23 +1031,33 @@ async def assess_target(raw, uid):
     if any(is_globally_blacklisted(k) for k in target_keys(tg)) or (tg["kind"] == "site" and await community_flagged(tg["host"])):
         return static_res("SCAM", [t(uid, "r_blacklist")], t(uid, "a_blacklist"), tg, "blacklist")
 
+    lang = get_user_lang(uid)
+    ckey = tg["url"].lower() if tg["kind"] == "site" else tg["key"]
+    if not fresh:
+        cached = _cache_get(lang, ckey)
+        if cached:
+            cached["target"] = tg
+            return cached
+
     source = "text_ai"
     if tg["kind"] == "site":
-        shot = await asyncio.to_thread(get_webpage_screenshot, tg["url"])
+        shot = await run_io(get_webpage_screenshot, tg["url"])
         if shot:
             save_stat("screenshot_count")
+            log_activity(uid, "SCREENSHOT", tg["url"])
             mime = "image/png" if shot[:4] == b"\x89PNG" else "image/jpeg"
             res = await ai_verdict(f"Analyze this webpage screenshot for URL '{tg['url']}'. Is it phishing, a scam, a fake login or payment page, a fake giveaway or other fraud?", uid, shot, mime)
             source = "screenshot"
         else:
             res = await ai_verdict(f"No screenshot is available. Judge only from the URL '{tg['url']}': typosquatting, brand impersonation, suspicious TLD, lookalike characters. If nothing is clearly suspicious answer UNSURE.", uid)
     else:
-        meta = await asyncio.to_thread(fetch_tg_meta, tg["handle_raw"]) if tg["host"] == "t.me" else None
+        meta = await run_io(fetch_tg_meta, tg["handle_raw"]) if tg["host"] == "t.me" else None
         info = f"Public page info: {meta}." if meta else "The page content could not be opened; judge only from the name/handle."
         res = await ai_verdict(f"Assess this {tg['host']} channel/account '{tg['key']}'. {info} Look for impersonation of banks, government or brands, fake giveaways, investment/crypto scams, fake 'support/admin' accounts. If nothing is clearly suspicious answer UNSURE (never claim it is safe without evidence).", uid)
     if res is None:
         return {"verdict": "ERROR", "target": tg}
     res.update({"target": tg, "source": source})
+    _cache_put(lang, ckey, res)
     return res
 
 async def record_result(user, res, source):
@@ -892,9 +1112,61 @@ async def process_lang(callback: CallbackQuery):
 @dp.callback_query(F.data == "quick_report")
 async def process_quick_report(callback: CallbackQuery):
     uid = callback.from_user.id
-    body = (callback.message.text or callback.message.caption or "")[:1500]
-    await notify_admin(t(ADMIN_ID, "a_report", uid=uid, text=body))
-    await callback.answer(t(uid, "report_thanks"), show_alert=True)
+    msg = callback.message
+    orig = msg.reply_to_message if msg else None
+    if not cooldown_ok(uid, "report", 8):
+        await callback.answer(t(uid, "spam"), show_alert=True)
+        return
+    kind = subject = raw = None
+    if orig is not None:
+        if orig.photo:
+            kind, subject = "photo", "photo"
+        elif orig.voice:
+            kind, subject = "voice", "voice"
+        elif orig.video:
+            kind, subject = "video", "video"
+        elif orig.document:
+            kind, subject = "file", (orig.document.file_name or "file")
+        else:
+            raw = extract_url(orig.text or "", allow_handle=True)
+            tg = parse_target(raw) if raw else None
+            if tg:
+                kind, subject = ("account" if tg["kind"] == "account" else "link"), tg["key"]
+    if not kind:
+        await callback.answer(t(uid, "report_none"), show_alert=True)
+        return
+    if find_open_report(uid, subject):
+        await callback.answer(t(uid, "report_dup"), show_alert=True)
+        return
+    await callback.answer(t(uid, "report_received"))          # tezkor javob, keyin AI tekshiradi
+
+    verdict, reasons = "UNSURE", ""
+    if raw:
+        res = await assess_target(raw, uid, fresh=True)       # AI qayta (yangi) tekshiradi
+        if res and res["verdict"] != "ERROR":
+            verdict, reasons = res["verdict"], "; ".join(res.get("reasons") or [])
+    else:
+        shown = (msg.text or msg.caption or "")
+        verdict = "SCAM" if "🚨" in shown else "SAFE" if "✅" in shown else "UNSURE"
+        reasons = shown[:400]
+    rid = add_report(uid, kind, subject, verdict, reasons, orig.chat.id, orig.message_id)
+    log_activity(uid, "REPORT", f"{kind}:{subject}")
+    if kind in ("photo", "voice", "video", "file"):
+        try:
+            await bot.copy_message(chat_id=ADMIN_ID, from_chat_id=orig.chat.id, message_id=orig.message_id)
+        except Exception as e:
+            logging.warning(f"copy_message xato: {e}")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t(ADMIN_ID, "a_btn_ok"), callback_data=f"rep_ok_{rid}"),
+        InlineKeyboardButton(text=t(ADMIN_ID, "a_btn_no"), callback_data=f"rep_no_{rid}"),
+    ]])
+    await notify_admin(t(ADMIN_ID, "a_report_req", kind=t(ADMIN_ID, "ctx_" + kind), subject=subject, uid=uid,
+                         username=callback.from_user.username or "-", verdict=t(ADMIN_ID, "v_" + verdict),
+                         reason=reasons[:350]), reply_markup=kb)
+    try:
+        await send_safe(msg.chat.id, t(uid, "report_sent"))
+    except Exception:
+        pass
 
 @dp.message(Command("block"))
 async def cmd_block(message: Message):
@@ -936,37 +1208,70 @@ async def cmd_block(message: Message):
     await notify_admin(t(ADMIN_ID, "a_block_req", target=key, uid=user.id, username=user.username or "-",
                          verdict=t(ADMIN_ID, "v_" + res["verdict"]), reason=reason[:300]), reply_markup=kb)
 
-async def _decide_block(callback: CallbackQuery, approve: bool):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer(t(callback.from_user.id, "a_only"), show_alert=True)
-        return
-    request_id = int(callback.data.split("_")[-1])
+async def decide_block(request_id, approve):
+    """/block so'rovini tasdiqlash/rad etish (Telegram va admin panel uchun umumiy). Natija: manzil yoki None."""
     row = get_pending(request_id)
     if not row or row[2] != "pending":
-        await callback.answer(t(ADMIN_ID, "a_not_found"), show_alert=True)
-        return
+        return None
     user_id, key, _ = row
     if approve:
         add_global_blacklist(key)
     update_pending_status(request_id, "approved" if approve else "rejected")
     log_activity(ADMIN_ID, "BLOCK_APPROVED" if approve else "BLOCK_REJECTED", key)
-    try:
-        await callback.message.edit_text(t(ADMIN_ID, "a_ok_done" if approve else "a_no_done", target=key), parse_mode="HTML")
-    except TelegramBadRequest:
-        pass
-    await callback.answer(t(ADMIN_ID, "a_ok_toast" if approve else "a_no_toast"))
     try:     # foydalanuvchiga uning o'z tilida
         await send_safe(user_id, t(user_id, "block_approved" if approve else "block_rejected", target=key))
     except Exception:
         pass
+    return key
+
+async def decide_report(rid, approve):
+    """Shikoyatni tasdiqlash/rad etish. Havola yoki kanal tasdiqlansa qora ro'yxatga tushadi. Natija: obyekt yoki None."""
+    row = get_report(rid)
+    if not row or row[6] != "pending":
+        return None
+    _, user_id, kind, subject = row[0], row[1], row[2], row[3]
+    update_report_status(rid, "approved" if approve else "rejected")
+    if approve and kind in ("link", "account"):
+        add_global_blacklist(subject)
+    log_activity(ADMIN_ID, "REPORT_APPROVED" if approve else "REPORT_REJECTED", subject)
+    try:
+        await send_safe(user_id, t(user_id, "report_confirmed" if approve else "report_dismissed", subject=subject))
+    except Exception:
+        pass
+    return subject
+
+async def _tg_decide(callback: CallbackQuery, kind: str, approve: bool):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer(t(callback.from_user.id, "a_only"), show_alert=True)
+        return
+    rid = int(callback.data.split("_")[-1])
+    subject = await (decide_block(rid, approve) if kind == "block" else decide_report(rid, approve))
+    if subject is None:
+        await callback.answer(t(ADMIN_ID, "a_not_found"), show_alert=True)
+        return
+    key = {("block", True): "a_ok_done", ("block", False): "a_no_done",
+           ("report", True): "a_rep_ok_done", ("report", False): "a_rep_no_done"}[(kind, approve)]
+    try:
+        await callback.message.edit_text(t(ADMIN_ID, key, target=subject, subject=subject), parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await callback.answer(t(ADMIN_ID, "a_ok_toast" if approve else "a_no_toast"))
 
 @dp.callback_query(F.data.startswith("approve_block_"))
 async def approve_block(callback: CallbackQuery):
-    await _decide_block(callback, True)
+    await _tg_decide(callback, "block", True)
 
 @dp.callback_query(F.data.startswith("reject_block_"))
 async def reject_block(callback: CallbackQuery):
-    await _decide_block(callback, False)
+    await _tg_decide(callback, "block", False)
+
+@dp.callback_query(F.data.startswith("rep_ok_"))
+async def approve_report(callback: CallbackQuery):
+    await _tg_decide(callback, "report", True)
+
+@dp.callback_query(F.data.startswith("rep_no_"))
+async def reject_report(callback: CallbackQuery):
+    await _tg_decide(callback, "report", False)
 
 @dp.message(Command("audit"))
 async def cmd_audit(message: Message):
@@ -1042,6 +1347,7 @@ async def media_flow(message, user, data, mime, prompt, ctx, stat_key, kind, rep
     if res["verdict"] == "SCAM":
         save_stat(stat_key)
         update_user_rep(user.id, -rep_bad)
+        log_activity(user.id, {"k_photo": "DANGER_PHOTO", "k_voice": "DANGER_VOICE", "k_video": "DANGER_VIDEO", "k_file": "DANGER_FILE"}[kind], "; ".join(res["reasons"]))
         await alert_admin(kind, user, "; ".join(res["reasons"]))
     elif res["verdict"] == "SAFE":
         update_user_rep(user.id, 2)
@@ -1055,7 +1361,7 @@ async def handle_photo(message: Message):
     try:
         file = await bot.get_file(message.photo[-1].file_id)
         data = (await bot.download_file(file.file_path)).read()
-        qr = await asyncio.to_thread(detect_qr, data)
+        qr = await run_io(detect_qr, data)
         if qr:
             qurl = extract_url(qr, allow_handle=False)
             head = t(user.id, "qr_found", data=qr[:200])
@@ -1121,6 +1427,7 @@ async def handle_document(message: Message):
         update_user_rep(user.id, -20)
         res = {"verdict": "SCAM", "reasons": [t(user.id, "r_danger_ext")], "advice": t(user.id, "a_danger_ext")}
         await reply_safe(message, fmt_verdict(user.id, res, "ctx_file"), reply_markup=report_kb(user.id))
+        log_activity(user.id, "DANGER_FILE", name)
         await alert_admin("k_file", user, name)
         return
     try:
@@ -1179,7 +1486,7 @@ async def handle_text(message: Message):
             return
         try:
             raw = await ai_call([text], SYS_CHAT.replace("{lang}", LANG_NAMES[get_user_lang(user.id)]),
-                                False, budget=25.0, uid=user.id, ctx="chat")
+                                False, budget=40.0, uid=user.id, ctx="chat")
         except Exception:
             await reply_safe(message, t(user.id, "ai_busy"))
             return
@@ -1210,22 +1517,61 @@ async def handle_text(message: Message):
     await reply_safe(message, fmt_verdict(user.id, res, ctx, res["target"]["display"]), reply_markup=report_kb(user.id))
 
 # ==================== UMUMIY XABAR (har kim o'z tilida) ====================
-async def send_broadcast_message(text: str):
-    tr = await translate_all(text)          # {'uz': ..., 'ru': ..., 'en': ...} yoki {}
-    ok = fail = 0
-    for uid, lang in get_user_langs():
-        msg = tr.get(lang if lang in LANGS else "uz") or text
+async def prepare_broadcast(texts):
+    """Admin yozgan tillar o'zgarishsiz qoladi, yetishmaganlari AI bilan alohida tarjima qilinadi."""
+    texts = {k: v.strip()[:3500] for k, v in texts.items() if k in LANGS and v and v.strip()}
+    if not texts:
+        return {}, []
+    src = next(l for l in LANGS if l in texts)
+    failed = []
+    for lang in LANGS:
+        if lang in texts:
+            continue
+        tr = await translate_one(texts[src], lang)
+        if tr:
+            texts[lang] = tr
+        else:
+            failed.append(lang)
+    return texts, failed
+
+async def safe_send_text(uid, text):
+    for _ in range(3):
         try:
-            await bot.send_message(uid, msg[:4000], parse_mode=None)
-            ok += 1
+            await bot.send_message(uid, text[:4000], parse_mode=None)
+            return "ok"
+        except TelegramRetryAfter as e:          # Telegram tezlik chegarasi: kutib qayta yuboramiz
+            await asyncio.sleep(e.retry_after + 1)
+        except TelegramForbiddenError:           # foydalanuvchi botni bloklagan
+            return "blocked"
         except Exception:
+            return "fail"
+    return "fail"
+
+async def send_broadcast_message(texts):
+    texts, failed = await prepare_broadcast(texts)
+    if not texts:
+        return
+    src = next(l for l in LANGS if l in texts)
+    ok, fail, per_lang = 0, 0, {l: 0 for l in LANGS}
+    for uid, lang in get_user_langs():
+        lang = lang if lang in LANGS else "uz"
+        result = await safe_send_text(uid, texts.get(lang) or texts[src])
+        if result == "ok":
+            ok += 1
+            per_lang[lang] += 1
+        else:
             fail += 1
-        await asyncio.sleep(0.05)
-    await notify_admin(t(ADMIN_ID, "a_broadcast_done", ok=ok, fail=fail, tr=t(ADMIN_ID, "tr_ok" if tr else "tr_fail")))
+        await asyncio.sleep(0.04)
+    detail = ", ".join(f"{l}: {n}" for l, n in per_lang.items())
+    if failed:
+        detail += " | ⚠️ " + ", ".join(failed) + " (" + t(ADMIN_ID, "tr_fail") + ")"
+    await notify_admin(t(ADMIN_ID, "a_broadcast_done", ok=ok, fail=fail, tr=detail))
 
 # ==================== ADMIN PANEL: XAVFSIZLIK ====================
+class Raw(str):
+    """Allaqachon xavfsiz HTML (tozalanmaydi)."""
+
 def esc(v):
-    """HTML uchun xavfsiz (XSS himoyasi)."""
     return h("" if v is None else str(v), quote=True)
 
 SESSION_TTL = 2 * 60 * 60
@@ -1271,6 +1617,185 @@ def clear_fails(ip):
 
 def same(a, b):
     return hmac.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
+
+# ==================== ADMIN PANEL: SAHIFALAR ====================
+PANEL_CSS = """
+body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; margin: 0; }
+.card { background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); overflow-x: auto; }
+h1, h2 { color: #38bdf8; }
+a { color: #38bdf8; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+th, td { border: 1px solid #334155; padding: 8px; text-align: left; font-size: 13px; word-break: break-word; }
+th { background: #334155; }
+.stat-box { display: inline-block; background: #334155; padding: 15px 20px; border-radius: 8px; margin: 0 10px 10px 0; text-decoration: none; color: #f8fafc; }
+a.stat-box:hover { background: #475569; }
+.stat-box b { color: #38bdf8; font-size: 1.2em; }
+textarea, input[type=text] { width: 100%; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; box-sizing: border-box; }
+textarea { height: 80px; }
+label { display: block; margin: 10px 0 4px; color: #94a3b8; font-size: 13px; }
+button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+button:hover { background: #0ea5e9; }
+button.sm { padding: 4px 10px; margin: 2px; font-size: 12px; }
+button.red { background: #ef4444; color: #fff; }
+button.grn { background: #22c55e; color: #fff; }
+.inl { display: inline; }
+.nav { margin-bottom: 20px; line-height: 2; }
+.nav a { color: #94a3b8; margin-right: 15px; text-decoration: none; }
+.nav a:hover { color: #38bdf8; }
+small { color: #94a3b8; }
+"""
+
+LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login - Cyber Bot</title><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><style>
+body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+.login-card { background: #1e293b; padding: 30px; border-radius: 10px; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center; }
+input { width: 100%; padding: 10px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 5px; box-sizing: border-box; }
+button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; width: 100%; border-radius: 5px; cursor: pointer; }
+button:hover { background: #0ea5e9; } h2 { color: #38bdf8; margin-bottom: 10px; }
+</style></head><body><div class="login-card"><h2>🔐 Admin Panel</h2>
+<p style="font-size: 13px; color: #94a3b8;">Xavfsizlik uchun parolni kiriting</p>
+<form action="/admin/login" method="POST"><input type="password" name="password" placeholder="Parol..." required>
+<button type="submit">Kirish</button></form></div></body></html>"""
+
+NAV_HTML = ('<div class="nav"><a href="/admin">Asosiy</a><a href="/admin/users">Foydalanuvchilar</a>'
+            '<a href="/admin/groups">Guruhlar</a><a href="/admin/dangers">Xavfli havolalar</a>'
+            '<a href="/admin/blacklist">Qora ro\'yxat</a><a href="/admin/blocks">Bloklash so\'rovlari</a>'
+            '<a href="/admin/reports">Shikoyatlar</a><a href="/admin/logs">Jurnal</a></div>')
+
+LOG_TYPES = ["CHECK_URL", "AUDIT", "SCREENSHOT", "DANGER_FILE", "DANGER_VOICE", "DANGER_VIDEO", "DANGER_PHOTO",
+             "REPORT", "REPORT_APPROVED", "REPORT_REJECTED", "BLOCK_REQUEST", "BLOCK_APPROVED", "BLOCK_REJECTED", "START"]
+
+def page(title, body):
+    return (f'<!DOCTYPE html><html><head><title>{esc(title)}</title><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1"><style>{PANEL_CSS}</style></head>'
+            f'<body>{NAV_HTML}{body}</body></html>')
+
+def table(headers, rows, empty="Hozircha bo'sh"):
+    def cell(c):
+        return c if isinstance(c, Raw) else esc(c)
+    head = "".join(f"<th>{esc(x)}</th>" for x in headers)
+    body = "".join("<tr>" + "".join(f"<td>{cell(c)}</td>" for c in r) + "</tr>" for r in rows)
+    if not body:
+        body = f'<tr><td colspan="{len(headers)}">{esc(empty)}</td></tr>'
+    return f'<div class="card"><table><tr>{head}</tr>{body}</table></div>'
+
+def act(csrf, a, v, label, back, cls="red"):
+    return Raw(f'<form class="inl" method="POST" action="/admin/action"><input type="hidden" name="csrf" value="{esc(csrf)}">'
+               f'<input type="hidden" name="a" value="{esc(a)}"><input type="hidden" name="v" value="{esc(v)}">'
+               f'<input type="hidden" name="back" value="{esc(back)}"><button class="sm {cls}">{esc(label)}</button></form>')
+
+def acts(*items):
+    return Raw("".join(items))
+
+def panel_main(sess):
+    st = load_stats()
+    csrf = esc(sess["csrf"])
+    n_blocks = db_count("pending_blocks", "WHERE status = 'pending'")
+    n_reports = db_count("reports", "WHERE status = 'pending'")
+    boxes = [
+        ("👥 Foydalanuvchilar", db_count("users"), "/admin/users"),
+        ("🏘 Guruhlar", db_count("chat_groups", "WHERE is_active = 1"), "/admin/groups"),
+        ("🔍 Tekshirilganlar", st.get("checked_count", 0), "/admin/logs?type=CHECK_URL"),
+        ("🚨 Xavfli havolalar", db_count("dangerous_urls"), "/admin/dangers"),
+        ("🛡️ Qora ro'yxat", db_count("blacklist"), "/admin/blacklist"),
+        ("🚫 Kutayotgan so'rovlar", n_blocks, "/admin/blocks"),
+        ("📢 Kutayotgan shikoyatlar", n_reports, "/admin/reports"),
+        ("📄 Zararli fayllar", st.get("file_danger_count", 0), "/admin/logs?type=DANGER_FILE"),
+        ("🎤 Ovoz xavfi", st.get("voice_danger_count", 0), "/admin/logs?type=DANGER_VOICE"),
+        ("🎬 Video xavfi", st.get("video_danger_count", 0), "/admin/logs?type=DANGER_VIDEO"),
+        ("🖼 Rasm xavfi", st.get("photo_danger_count", 0), "/admin/logs?type=DANGER_PHOTO"),
+        ("📸 Skrinshotlar", st.get("screenshot_count", 0), "/admin/logs?type=SCREENSHOT"),
+        ("🕵️ Auditlar", st.get("audit_count", 0), "/admin/logs?type=AUDIT"),
+    ]
+    stat_html = "".join(f'<a href="{esc(link)}" class="stat-box">{esc(label)}<br><b>{esc(val)}</b></a>' for label, val, link in boxes)
+    body = (
+        "<h1>🔐 Himoyalangan Admin Panel</h1>"
+        f'<div class="card"><h2>📊 Bot Statistikasi</h2>{stat_html}</div>'
+        '<div class="card"><h2>📢 Barcha foydalanuvchilarga xabar</h2>'
+        "<p><small>Kamida bitta tilni yozing. Yozilmagan tillarga bot AI bilan tarjima qiladi, har kim o'zi tanlagan tilda oladi. "
+        "Aniq matn kerak bo'lsa, uchala tilni ham o'zingiz yozing.</small></p>"
+        f'<form action="/admin/broadcast" method="POST"><input type="hidden" name="csrf" value="{csrf}">'
+        '<label>🇺🇿 O\'zbekcha</label><textarea name="uz"></textarea>'
+        '<label>🇷🇺 Русский</label><textarea name="ru"></textarea>'
+        '<label>🇬🇧 English</label><textarea name="en"></textarea><br>'
+        '<button type="submit">Xabarni yuborish 🚀</button></form></div>'
+        f'<div class="card"><form action="/admin/logout" method="POST"><input type="hidden" name="csrf" value="{csrf}">'
+        '<button type="submit">Chiqish</button></form></div>'
+    )
+    return page("Admin Panel - Cyber Bot", body)
+
+def panel_users(sess, back):
+    c = sess["csrf"]
+    rows = [(Raw(f'<a href="/admin/user?id={int(u[0])}">{int(u[0])}</a>'), "@" + (u[1] or "-"), u[2], u[3], u[4],
+             act(c, "user_del", u[0], "🗑 O'chirish", back)) for u in get_all_users()]
+    return page("Foydalanuvchilar", f"<h1>👥 Foydalanuvchilar ({len(rows)})</h1>"
+                + table(["User ID", "Username", "Ismi", "Til", "Reyting", "Amal"], rows))
+
+def panel_user(sess, uid, back):
+    c = sess["csrf"]
+    u = get_user_row(uid)
+    if not u:
+        return page("Topilmadi", "<h1>Foydalanuvchi topilmadi</h1>")
+    info = table(["User ID", "Username", "Ismi", "Til", "Reyting", "Amal"],
+                 [(u[0], "@" + (u[1] or "-"), u[2], u[3], u[4], act(c, "user_del", u[0], "🗑 O'chirish", "/admin/users"))])
+    logs = table(["#", "Amal", "Tafsilot", "Vaqt"], get_user_logs(uid), "Faollik yo'q")
+    return page("Foydalanuvchi", f"<h1>👤 Foydalanuvchi {int(uid)}</h1>{info}<h2>So'nggi faollik</h2>{logs}")
+
+def panel_groups(sess, back):
+    c = sess["csrf"]
+    rows = [(g[0], g[1], ("@" + g[2]) if g[2] else "-", g[3], g[4], g[5], act(c, "group_del", g[0], "🗑 O'chirish", back))
+            for g in get_all_groups()]
+    return page("Guruhlar", f"<h1>🏘 Guruhlar ({len(rows)})</h1>"
+                + table(["Chat ID", "Nomi", "Username", "Turi", "A'zolar", "Qo'shilgan", "Amal"], rows, "Hozircha guruhlar yo'q."))
+
+def panel_dangers(sess, back):
+    c = sess["csrf"]
+    rows = [(d[0], d[1], d[2], d[3], d[5], (d[4] or "")[:120], d[6],
+             acts(act(c, "danger_block", d[0], "🚫 Qora ro'yxatga", back, "grn"), act(c, "danger_del", d[0], "🗑", back)))
+            for d in get_dangerous_urls()]
+    return page("Xavfli havolalar", f"<h1>🚨 Xavfli havolalar ({len(rows)})</h1>"
+                + table(["#", "URL", "Manzil", "User ID", "Manba", "Sabab", "Vaqt", "Amal"], rows, "Hozircha saqlanmagan."))
+
+def panel_blacklist(sess, back):
+    c = sess["csrf"]
+    keys = get_blacklist()
+    form = ('<div class="card"><h2>➕ Qora ro\'yxatga qo\'shish</h2>'
+            '<p><small>Sayt (example.com), kanal (@nom) yoki havola (instagram.com/nom) yozing.</small></p>'
+            f'<form method="POST" action="/admin/action"><input type="hidden" name="csrf" value="{esc(c)}">'
+            f'<input type="hidden" name="a" value="bl_add"><input type="hidden" name="back" value="{esc(back)}">'
+            '<input type="text" name="v" placeholder="example.com yoki @kanal" required><button type="submit">Qo\'shish</button></form></div>')
+    rows = [(k, act(c, "bl_del", k, "🗑 O'chirish", back)) for k in keys]
+    return page("Qora ro'yxat", f"<h1>🛡️ Qora ro'yxat ({len(keys)})</h1>{form}" + table(["Manzil", "Amal"], rows))
+
+def panel_blocks(sess, back):
+    c = sess["csrf"]
+    rows = []
+    for r in get_requests():
+        buttons = [act(c, "blk_del", r[0], "🗑", back)]
+        if r[4] == "pending":
+            buttons = [act(c, "blk_ok", r[0], "✅ Tasdiqlash", back, "grn"), act(c, "blk_no", r[0], "❌ Rad etish", back)] + buttons
+        rows.append((r[0], r[1], r[2], (r[3] or "")[:150], r[4], r[5], acts(*buttons)))
+    return page("Bloklash so'rovlari", f"<h1>🚫 Bloklash so'rovlari ({len(rows)})</h1>"
+                + table(["#", "User ID", "Manzil", "AI xulosasi", "Holat", "Vaqt", "Amal"], rows))
+
+def panel_reports(sess, back):
+    c = sess["csrf"]
+    rows = []
+    for r in get_reports():
+        buttons = [act(c, "rep_del", r[0], "🗑", back)]
+        if r[6] == "pending":
+            buttons = [act(c, "rep_ok", r[0], "✅ Tasdiqlash", back, "grn"), act(c, "rep_no", r[0], "❌ Rad etish", back)] + buttons
+        rows.append((r[0], r[1], r[2], r[3], r[4], (r[5] or "")[:150], r[6], r[7], acts(*buttons)))
+    return page("Shikoyatlar", f"<h1>📢 Shikoyatlar ({len(rows)})</h1>"
+                + table(["#", "User ID", "Turi", "Obyekt", "AI", "AI sababi", "Holat", "Vaqt", "Amal"], rows))
+
+def panel_logs(sess, action, back):
+    c = sess["csrf"]
+    links = '<a href="/admin/logs">Hammasi</a> ' + " ".join(f'<a href="/admin/logs?type={x}">{x}</a>' for x in LOG_TYPES)
+    clear = act(c, "logs_clear", action or "", "🗑 Tozalash" + (f" ({action})" if action else " (hammasi)"), back)
+    rows = get_logs(action)
+    return page("Jurnal", f"<h1>📜 Faollik jurnali {esc(action or '')} ({len(rows)})</h1>"
+                f'<div class="card">{links}<br>{clear}</div>' + table(["#", "User ID", "Amal", "Tafsilot", "Vaqt"], rows))
 
 class SecureAdminMixin:
     def _client_ip(self):
@@ -1318,9 +1843,44 @@ class SecureAdminMixin:
             n = int(self.headers.get("Content-Length", 0))
         except ValueError:
             return {}
-        if n <= 0 or n > 20000:
+        if n <= 0 or n > 30000:
             return {}
         return parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+
+    def _run_async(self, coro):
+        return asyncio.run_coroutine_threadsafe(coro, bot_loop).result(timeout=40)
+
+    def _do_action(self, a, v):
+        if a == "user_del":
+            if int(v) != ADMIN_ID:
+                delete_user(int(v))
+        elif a == "group_del":
+            delete_group(int(v))
+        elif a == "danger_del":
+            delete_dangerous(int(v))
+        elif a == "danger_block":
+            row = get_dangerous(int(v))
+            if row and row[2]:
+                add_global_blacklist(row[2])
+        elif a == "bl_add":
+            tg = parse_target(v)
+            if not tg or tg["kind"] == "home":
+                raise ValueError("Manzil formati noto'g'ri")
+            add_global_blacklist(tg["key"])
+        elif a == "bl_del":
+            remove_blacklist(v)
+        elif a in ("blk_ok", "blk_no"):
+            self._run_async(decide_block(int(v), a == "blk_ok"))
+        elif a == "blk_del":
+            delete_request(int(v))
+        elif a in ("rep_ok", "rep_no"):
+            self._run_async(decide_report(int(v), a == "rep_ok"))
+        elif a == "rep_del":
+            delete_report(int(v))
+        elif a == "logs_clear":
+            clear_logs(v if v in LOG_TYPES else None)
+        else:
+            raise ValueError("Noma'lum amal")
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -1350,12 +1910,23 @@ class SecureAdminMixin:
             return
 
         if path == "/admin/broadcast":
-            msg = form.get("message", [""])[0].strip()[:4000]
-            if not msg:
+            texts = {l: form.get(l, [""])[0] for l in LANGS}
+            if not any(v.strip() for v in texts.values()):
                 self._send_html("Xabar matni bo'sh bo'lishi mumkin emas!", 400)
                 return
-            asyncio.run_coroutine_threadsafe(send_broadcast_message(msg), bot_loop)
-            self._send_html("<h1>✅ Xabar yuborish boshlandi!</h1><p>Har bir foydalanuvchi o'z tilida oladi.</p><p><a href='/admin'>Orqaga qaytish</a></p>")
+            asyncio.run_coroutine_threadsafe(send_broadcast_message(texts), bot_loop)
+            self._send_html("<h1>✅ Xabar yuborish boshlandi!</h1><p>Har bir foydalanuvchi o'z tilida oladi. Natija Telegramda adminga keladi.</p><p><a href='/admin'>Orqaga qaytish</a></p>")
+        elif path == "/admin/action":
+            back = form.get("back", ["/admin"])[0]
+            if not re.fullmatch(r"/admin[A-Za-z0-9_/?=&.\-]*", back):
+                back = "/admin"
+            try:
+                self._do_action(form.get("a", [""])[0], form.get("v", [""])[0].strip())
+            except Exception as e:
+                logging.error(f"panel amali xato: {e}")
+                self._send_html(page("Xato", f"<h1>⚠️ Xato</h1><p>{esc(e)}</p><p><a href='{esc(back)}'>Orqaga</a></p>"), 500)
+                return
+            self._redirect(back)
         elif path == "/admin/logout":
             with _sec_lock:
                 for k, v in list(ADMIN_SESSIONS.items()):
@@ -1365,92 +1936,6 @@ class SecureAdminMixin:
         else:
             self._send_html("Not Found", 404)
 
-# ==================== ADMIN PANEL: SAHIFALAR ====================
-PANEL_CSS = """
-body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; padding: 20px; margin: 0; }
-.card { background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); overflow-x: auto; }
-h1, h2 { color: #38bdf8; }
-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-th, td { border: 1px solid #334155; padding: 10px; text-align: left; font-size: 14px; word-break: break-all; }
-th { background: #334155; }
-.stat-box { display: inline-block; background: #334155; padding: 15px 20px; border-radius: 8px; margin: 0 10px 10px 0; text-decoration: none; color: #f8fafc; }
-a.stat-box:hover { background: #475569; }
-.stat-box b { color: #38bdf8; font-size: 1.2em; }
-textarea { width: 100%; height: 100px; background: #0f172a; color: #fff; border: 1px solid #334155; padding: 10px; border-radius: 5px; box-sizing: border-box; }
-button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; border-radius: 5px; cursor: pointer; margin-top: 10px; }
-button:hover { background: #0ea5e9; }
-.nav { margin-bottom: 20px; }
-.nav a { color: #94a3b8; margin-right: 15px; text-decoration: none; }
-.nav a:hover { color: #38bdf8; }
-small { color: #94a3b8; }
-"""
-
-LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login - Cyber Bot</title><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><style>
-body { font-family: Arial, sans-serif; background: #0f172a; color: #f8fafc; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-.login-card { background: #1e293b; padding: 30px; border-radius: 10px; width: 320px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: center; }
-input { width: 100%; padding: 10px; margin: 15px 0; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 5px; box-sizing: border-box; }
-button { background: #38bdf8; color: #0f172a; border: none; padding: 10px 20px; font-weight: bold; width: 100%; border-radius: 5px; cursor: pointer; }
-button:hover { background: #0ea5e9; } h2 { color: #38bdf8; margin-bottom: 10px; }
-</style></head><body><div class="login-card"><h2>🔐 Admin Panel</h2>
-<p style="font-size: 13px; color: #94a3b8;">Xavfsizlik uchun parolni kiriting</p>
-<form action="/admin/login" method="POST"><input type="password" name="password" placeholder="Parol..." required>
-<button type="submit">Kirish</button></form></div></body></html>"""
-
-NAV_HTML = ('<div class="nav"><a href="/admin">Asosiy</a><a href="/admin/users">Foydalanuvchilar</a>'
-            '<a href="/admin/groups">Guruhlar</a><a href="/admin/dangers">Xavfli havolalar</a></div>')
-
-def page(title, body):
-    return (f'<!DOCTYPE html><html><head><title>{esc(title)}</title><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1"><style>{PANEL_CSS}</style></head>'
-            f'<body>{NAV_HTML}{body}</body></html>')
-
-def table(headers, rows, empty="Hozircha bo'sh"):
-    head = "".join(f"<th>{esc(x)}</th>" for x in headers)
-    body = "".join("<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>" for r in rows)
-    if not body:
-        body = f'<tr><td colspan="{len(headers)}">{esc(empty)}</td></tr>'
-    return f'<div class="card"><table><tr>{head}</tr>{body}</table></div>'
-
-def panel_main(sess):
-    st = load_stats()
-    csrf = esc(sess["csrf"])
-    pend, bl = get_pendings(), get_blacklist()
-    boxes = [
-        ("👥 Foydalanuvchilar", db_count("users"), "/admin/users"),
-        ("🏘 Guruhlar", db_count("chat_groups", "WHERE is_active = 1"), "/admin/groups"),
-        ("🔍 Tekshirilganlar", st.get("checked_count", 0), None),
-        ("🚨 Xavfli havolalar", f"{st.get('danger_count', 0)} <small>({db_count('dangerous_urls')} saqlangan)</small>", "/admin/dangers"),
-        ("📄 Zararli fayllar", st.get("file_danger_count", 0), None),
-        ("🎤 Ovoz xavfi", st.get("voice_danger_count", 0), None),
-        ("🎬 Video xavfi", st.get("video_danger_count", 0), None),
-        ("🖼 Rasm xavfi", st.get("photo_danger_count", 0), None),
-        ("📸 Skrinshotlar", st.get("screenshot_count", 0), None),
-        ("🕵️ Auditlar", st.get("audit_count", 0), None),
-    ]
-    stat_html = ""
-    for label, val, link in boxes:
-        val_html = val if isinstance(val, str) else esc(val)     # val_html faqat o'zimiz yasagan matn
-        inner = f"{esc(label)}<br><b>{val_html}</b>"
-        stat_html += f'<a href="{link}" class="stat-box">{inner}</a>' if link else f'<div class="stat-box">{inner}</div>'
-    bl_text = ", ".join(esc(x) for x in bl) if bl else "Hozircha bo'sh"
-    pend_rows = [(p[0], p[1], p[2], (p[3] or "")[:80], p[4]) for p in pend]
-    body = (
-        "<h1>🔐 Himoyalangan Admin Panel</h1>"
-        f'<div class="card"><h2>📊 Bot Statistikasi</h2>{stat_html}</div>'
-        '<div class="card"><h2>📢 Barcha foydalanuvchilarga xabar (Broadcast)</h2>'
-        "<p><small>Xabarni bir tilda yozing — bot uni avtomatik tarjima qiladi va har kim o'zi tanlagan tilda oladi.</small></p>"
-        f'<form action="/admin/broadcast" method="POST"><input type="hidden" name="csrf" value="{csrf}">'
-        '<textarea name="message" placeholder="Xabar matni..." required></textarea><br>'
-        '<button type="submit">Xabarni yuborish 🚀</button></form></div>'
-        f"<h2>🚫 Tasdiqlashni kutayotgan manzillar ({len(pend)})</h2>"
-        + table(["ID", "User ID", "Manzil", "Sabab", "Vaqt"], pend_rows) +
-        f'<div class="card"><h2>🛡️ Qora ro\'yxat ({len(bl)})</h2><p>{bl_text}</p></div>'
-        f'<div class="card"><form action="/admin/logout" method="POST"><input type="hidden" name="csrf" value="{csrf}">'
-        '<button type="submit">Chiqish</button></form></div>'
-    )
-    return page("Admin Panel - Cyber Bot", body)
-
 class SimpleHandler(SecureAdminMixin, BaseHTTPRequestHandler):
     def do_HEAD(self):          # UptimeRobot kabi xizmatlar HEAD yuboradi
         self.send_response(200)
@@ -1458,7 +1943,9 @@ class SimpleHandler(SecureAdminMixin, BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path.rstrip("/") or "/"
+        pu = urlparse(self.path)
+        path = pu.path.rstrip("/") or "/"
+        qs = parse_qs(pu.query)
         if path in ("/", "/health"):
             self._send_html("🤖 Bot ishlayapti!")
             return
@@ -1472,24 +1959,37 @@ class SimpleHandler(SecureAdminMixin, BaseHTTPRequestHandler):
             else:
                 self._redirect("/admin")
             return
-        if path == "/admin":
-            self._send_html(panel_main(sess))
-        elif path == "/admin/users":
-            rows = [(i, u[0], "@" + (u[1] or "-"), u[2], u[3], u[4]) for i, u in enumerate(get_all_users(), 1)]
-            self._send_html(page("Foydalanuvchilar", f"<h1>👥 Foydalanuvchilar ({len(rows)})</h1>"
-                                 + table(["#", "User ID", "Username", "Ismi", "Til", "Reyting"], rows)))
-        elif path == "/admin/groups":
-            rows = [(i, g[0], g[1], ("@" + g[2]) if g[2] else "-", g[3], g[4], g[5]) for i, g in enumerate(get_all_groups(), 1)]
-            self._send_html(page("Guruhlar", f"<h1>🏘 Guruhlar ({len(rows)})</h1>"
-                                 + table(["#", "Chat ID", "Nomi", "Username", "Turi", "A'zolar", "Qo'shilgan"], rows,
-                                         "Hozircha guruhlar yo'q.")))
-        elif path == "/admin/dangers":
-            rows = [(i, d[1], d[2], d[3], d[5], (d[4] or "")[:100], d[6]) for i, d in enumerate(get_dangerous_urls(), 1)]
-            self._send_html(page("Xavfli havolalar", f"<h1>🚨 Xavfli havolalar ({len(rows)})</h1>"
-                                 + table(["#", "URL", "Manzil", "User ID", "Manba", "Sabab", "Vaqt"], rows,
-                                         "Hozircha saqlanmagan.")))
-        else:
-            self._send_html("Not Found", 404)
+        back = path + (("?" + pu.query) if pu.query else "")
+        if not re.fullmatch(r"/admin[A-Za-z0-9_/?=&.\-]*", back):
+            back = path
+        try:
+            if path == "/admin":
+                out = panel_main(sess)
+            elif path == "/admin/users":
+                out = panel_users(sess, back)
+            elif path == "/admin/user":
+                out = panel_user(sess, int(qs.get("id", ["0"])[0]), back)
+            elif path == "/admin/groups":
+                out = panel_groups(sess, back)
+            elif path == "/admin/dangers":
+                out = panel_dangers(sess, back)
+            elif path == "/admin/blacklist":
+                out = panel_blacklist(sess, back)
+            elif path == "/admin/blocks":
+                out = panel_blocks(sess, back)
+            elif path == "/admin/reports":
+                out = panel_reports(sess, back)
+            elif path == "/admin/logs":
+                typ = qs.get("type", [""])[0]
+                out = panel_logs(sess, typ if typ in LOG_TYPES else None, back)
+            else:
+                self._send_html("Not Found", 404)
+                return
+        except Exception as e:
+            logging.error(f"panel sahifa xato: {e}")
+            self._send_html(page("Xato", f"<h1>⚠️ Xato</h1><p>{esc(e)}</p>"), 500)
+            return
+        self._send_html(out)
 
     def log_message(self, format, *args):
         pass
@@ -1500,6 +2000,18 @@ def run_server():
 
 # ==================== MAIN ====================
 bot_loop = None
+
+async def keepalive():
+    """Render uxlab qolmasligi uchun bot o'z /health manzilini vaqti-vaqti bilan chaqiradi (UptimeRobot bilan birga)."""
+    base = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+    if not base:
+        return
+    while True:
+        await asyncio.sleep(540)
+        try:
+            await run_io(lambda: requests.get(base + "/health", timeout=15))
+        except Exception:
+            pass
 
 async def main():
     global bot_loop, BOT_USERNAME
@@ -1512,6 +2024,7 @@ async def main():
         BOT_USERNAME = None
     await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMANDS["uz"]])
     await apply_commands(ADMIN_ID, get_user_lang(ADMIN_ID))
+    asyncio.create_task(keepalive())
     logging.info("Xavfsiz Bot ishga tushdi...")
     await dp.start_polling(bot, allowed_updates=["message", "callback_query", "my_chat_member", "chat_member"])
 
